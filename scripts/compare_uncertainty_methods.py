@@ -370,11 +370,24 @@ def main():
             "mean_predictive_entropy": float(
                 mc_results["predictive_entropy"].mean()
             ),
+            "mean_expected_entropy": float(
+                mc_results["expected_entropy"].mean()
+            ),
+            "mean_mutual_information": float(
+                mc_results["mutual_information"].mean()
+            ),
+            "mean_predictive_variance": float(
+                mc_results["predictive_variance"].mean()
+            ),
             "wall_time_s": mc_time,
         }
         print(f"  Accuracy:           {mc_results['accuracy'] * 100:.2f}%")
         print(f"  ECE:                {mc_ece:.4f}")
         print(f"  Forward passes:     {args.mc_forward_passes}")
+        print(f"  Pred. entropy:      {mc_results['predictive_entropy'].mean():.4f}")
+        print(f"  Expected entropy:   {mc_results['expected_entropy'].mean():.4f}")
+        print(f"  Mutual info (epist):{mc_results['mutual_information'].mean():.4f}")
+        print(f"  Pred. variance:     {mc_results['predictive_variance'].mean():.6f}")
         print(f"  Time:               {mc_time:.1f}s")
 
         del baseline_model
@@ -408,11 +421,19 @@ def main():
             "mean_predictive_entropy": float(
                 ens_results["predictive_entropy"].mean()
             ),
+            "mean_mutual_information": float(
+                ens_results["mutual_information"].mean()
+            ),
+            "mean_predictive_variance": float(
+                ens_results["predictive_variance"].mean()
+            ),
             "wall_time_s": ens_time,
         }
         print(f"  Accuracy:           {ens_results['accuracy'] * 100:.2f}%")
         print(f"  ECE:                {ens_ece:.4f}")
         print(f"  Ensemble members:   {ens_results['n_models']}")
+        print(f"  Mutual info (epist):{ens_results['mutual_information'].mean():.4f}")
+        print(f"  Pred. variance:     {ens_results['predictive_variance'].mean():.6f}")
         print(f"  Time:               {ens_time:.1f}s")
     else:
         print("\n--- 3. Deep Ensemble ---")

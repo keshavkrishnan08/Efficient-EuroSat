@@ -65,7 +65,15 @@ def mc_dropout_inference(
         - ``predictions`` : numpy.ndarray -- predicted class per sample.
         - ``mean_probs`` : numpy.ndarray -- ``(N, C)`` mean softmax probs.
         - ``predictive_entropy`` : numpy.ndarray -- ``(N,)`` entropy of
-          mean predictive distribution.
+          mean predictive distribution, H[E_q[p(y|x)]].
+        - ``expected_entropy`` : numpy.ndarray -- ``(N,)`` mean entropy
+          across stochastic passes, E_q[H[p(y|x)]].
+        - ``mutual_information`` : numpy.ndarray -- ``(N,)`` epistemic
+          uncertainty as MI = H[E[p]] - E[H[p]] (Gal & Ghahramani, 2016).
+        - ``predictive_variance`` : numpy.ndarray -- ``(N,)`` mean variance
+          of softmax predictions across passes (scalar per sample).
+        - ``per_class_variance`` : numpy.ndarray -- ``(N, C)`` variance of
+          softmax predictions per class across passes.
     """
     model.to(device)
     # Train mode enables dropout; LayerNorm is unaffected.
@@ -75,13 +83,12 @@ def mc_dropout_inference(
     if hasattr(model, "early_exit_enabled"):
         model.early_exit_enabled = False
 
-    all_mean_probs: List[np.ndarray] = []
+    all_stacked: List[np.ndarray] = []
     all_labels: List[np.ndarray] = []
 
     with torch.no_grad():
         for images, labels in dataloader:
             images = images.to(device)
-            batch_size = images.shape[0]
 
             # Collect softmax predictions across N stochastic passes.
             stacked_probs = []
@@ -96,19 +103,38 @@ def mc_dropout_inference(
                 probs = F.softmax(logits, dim=-1)  # (B, C)
                 stacked_probs.append(probs.cpu().numpy())
 
-            # Stack: (n_forward, B, C) -> mean over axis 0 -> (B, C)
+            # Stack: (n_forward, B, C) — keep full stochastic samples
             stacked = np.stack(stacked_probs, axis=0)
-            mean_probs = stacked.mean(axis=0)
 
-            all_mean_probs.append(mean_probs)
+            all_stacked.append(stacked)
             all_labels.append(labels.numpy())
 
-    mean_probs_all = np.concatenate(all_mean_probs, axis=0)  # (N, C)
+    # Concatenate across batches: (n_forward, N, C)
+    stacked_all = np.concatenate(all_stacked, axis=1)
     labels_all = np.concatenate(all_labels, axis=0)  # (N,)
 
-    # Predictive entropy: H[p] = -sum(p * log(p)), with log(0) guarded.
-    log_probs = np.log(mean_probs_all + 1e-12)
-    predictive_entropy = -np.sum(mean_probs_all * log_probs, axis=1)
+    # Mean predictive distribution: E_q[p(y|x)]
+    mean_probs_all = stacked_all.mean(axis=0)  # (N, C)
+
+    # --- Predictive entropy: H[E_q[p(y|x)]] ---
+    log_mean = np.log(mean_probs_all + 1e-12)
+    predictive_entropy = -np.sum(mean_probs_all * log_mean, axis=1)  # (N,)
+
+    # --- Expected entropy: E_q[H[p(y|x)]] ---
+    # Entropy of each stochastic pass, then average over passes
+    log_stacked = np.log(stacked_all + 1e-12)  # (T, N, C)
+    per_pass_entropy = -np.sum(stacked_all * log_stacked, axis=2)  # (T, N)
+    expected_entropy = per_pass_entropy.mean(axis=0)  # (N,)
+
+    # --- Mutual information (epistemic uncertainty) ---
+    # MI = H[E[p]] - E[H[p]]  (Gal & Ghahramani, 2016; Smith & Gal, 2018)
+    mutual_information = predictive_entropy - expected_entropy  # (N,)
+    # Clamp to >= 0 (numerical precision)
+    mutual_information = np.maximum(mutual_information, 0.0)
+
+    # --- Predictive variance ---
+    per_class_variance = stacked_all.var(axis=0)  # (N, C)
+    predictive_variance = per_class_variance.mean(axis=1)  # (N,) scalar per sample
 
     predictions = mean_probs_all.argmax(axis=1)
     accuracy = float((predictions == labels_all).mean())
@@ -118,6 +144,10 @@ def mc_dropout_inference(
         "predictions": predictions,
         "mean_probs": mean_probs_all,
         "predictive_entropy": predictive_entropy,
+        "expected_entropy": expected_entropy,
+        "mutual_information": mutual_information,
+        "predictive_variance": predictive_variance,
+        "per_class_variance": per_class_variance,
     }
 
 
@@ -210,7 +240,12 @@ def ensemble_inference(
 
         - ``accuracy`` : float -- top-1 accuracy from averaged probs.
         - ``mean_probs`` : numpy.ndarray -- ``(N, C)`` averaged softmax.
-        - ``predictive_entropy`` : numpy.ndarray -- ``(N,)`` entropy.
+        - ``predictive_entropy`` : numpy.ndarray -- ``(N,)`` entropy of
+          mean predictive distribution.
+        - ``mutual_information`` : numpy.ndarray -- ``(N,)`` epistemic
+          uncertainty as MI = H[E[p]] - E[H[p]].
+        - ``predictive_variance`` : numpy.ndarray -- ``(N,)`` mean variance
+          of softmax predictions across ensemble members.
         - ``n_models`` : int -- number of ensemble members.
     """
     n_models = len(checkpoint_paths)
@@ -261,9 +296,21 @@ def ensemble_inference(
     stacked = np.stack(all_member_probs, axis=0)
     mean_probs = stacked.mean(axis=0)
 
-    # Predictive entropy.
-    log_probs = np.log(mean_probs + 1e-12)
-    predictive_entropy = -np.sum(mean_probs * log_probs, axis=1)
+    # Predictive entropy: H[E[p]]
+    log_mean = np.log(mean_probs + 1e-12)
+    predictive_entropy = -np.sum(mean_probs * log_mean, axis=1)
+
+    # Expected entropy: E[H[p]] (average entropy across members)
+    log_stacked = np.log(stacked + 1e-12)  # (M, N, C)
+    per_member_entropy = -np.sum(stacked * log_stacked, axis=2)  # (M, N)
+    expected_entropy = per_member_entropy.mean(axis=0)  # (N,)
+
+    # Mutual information (epistemic uncertainty)
+    mutual_information = np.maximum(predictive_entropy - expected_entropy, 0.0)
+
+    # Predictive variance across ensemble members
+    per_class_variance = stacked.var(axis=0)  # (N, C)
+    predictive_variance = per_class_variance.mean(axis=1)  # (N,)
 
     predictions = mean_probs.argmax(axis=1)
     accuracy = float((predictions == labels_all).mean())
@@ -272,6 +319,8 @@ def ensemble_inference(
         "accuracy": accuracy,
         "mean_probs": mean_probs,
         "predictive_entropy": predictive_entropy,
+        "mutual_information": mutual_information,
+        "predictive_variance": predictive_variance,
         "n_models": n_models,
     }
 
