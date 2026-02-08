@@ -39,7 +39,7 @@ echo " PHASE 0: Environment Setup"
 echo "=================================================================="
 
 echo "[0.1] Installing dependencies..."
-pip install -q torch torchvision numpy matplotlib seaborn pyyaml tqdm \
+pip install -q torch torchvision timm numpy matplotlib seaborn pyyaml tqdm \
     scikit-learn pandas Pillow 2>&1 | tail -3
 echo "  Done."
 
@@ -137,7 +137,7 @@ echo " will be adjusted and the experiment retrained (up to 3 retries)."
 echo ""
 
 python3 -u scripts/autonomous_orchestrator.py \
-    --epochs 100 \
+    --epochs 200 \
     --batch_size 64 \
     --data_root ./data
 

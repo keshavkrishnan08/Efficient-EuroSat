@@ -7,16 +7,19 @@ runs them sequentially by invoking train.py via subprocess. Each experiment
 gets its own checkpoint directory and can be selectively run or resumed.
 
 Experiments:
-    1. baseline           -- Baseline ViT (no modifications)
-    2. ucat_only          -- +UCAT loss only
-    3. early_exit_only    -- +Early Exit only
-    4. dropout_only       -- +Learned Dropout only
-    5. residual_only      -- +Learned Residual only
-    6. annealing_only     -- +Temperature Annealing only
-    7. all_combined_s42   -- All modifications combined, seed 42
-    8. all_no_ucat        -- All modifications minus UCAT, seed 42
-    9. all_combined_s123  -- All modifications combined, seed 123
-   10. all_combined_s456  -- All modifications combined, seed 456
+    1. baseline                -- Baseline ViT (no modifications)
+    2. ucat_only               -- +UCAT loss only
+    3. early_exit_only         -- +Early Exit only
+    4. dropout_only            -- +Learned Dropout only
+    5. residual_only           -- +Learned Residual only
+    6. annealing_only          -- +Temperature Annealing only
+    7. all_combined_s42        -- All modifications combined, seed 42
+    8. all_no_ucat             -- All modifications minus UCAT, seed 42
+    9. all_combined_s123       -- All modifications combined, seed 123
+   10. all_combined_s456       -- All modifications combined, seed 456
+   11. decomp_input_dep_only   -- Input-dep tau_a, fixed tau_e
+   12. decomp_with_losses      -- Decomp + all losses
+   13. decomp_with_losses_s123 -- Decomp + losses, seed 123
 
 Usage:
     # Run all experiments
@@ -181,19 +184,6 @@ EXPERIMENTS = [
     },
     {
         "number": 12,
-        "name": "decomp_no_losses",
-        "description": "Decomp, no decomp losses",
-        "flags": [
-            "--model", "efficient_eurosat",
-            "--use_decomposition",
-            "--lambda_ucat", "0.1",
-            "--lambda_aleatoric", "0.0",
-            "--lambda_epistemic", "0.0",
-            "--seed", "42",
-        ],
-    },
-    {
-        "number": 13,
         "name": "decomp_with_losses",
         "description": "Decomp + all losses",
         "flags": [
@@ -206,7 +196,7 @@ EXPERIMENTS = [
         ],
     },
     {
-        "number": 14,
+        "number": 13,
         "name": "decomp_with_losses_s123",
         "description": "Decomp + losses, seed 123",
         "flags": [
@@ -240,7 +230,7 @@ def parse_args():
         help="Skip experiments whose checkpoint directory already contains a checkpoint file.",
     )
     parser.add_argument(
-        "--epochs", type=int, default=100,
+        "--epochs", type=int, default=200,
         help="Number of training epochs per experiment.",
     )
     parser.add_argument(

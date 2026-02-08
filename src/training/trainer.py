@@ -148,6 +148,8 @@ class EuroSATTrainer:
         lambda_epistemic: float = 0.05,
         blur_loss_frequency: int = 10,
         class_rarity: Optional[torch.Tensor] = None,
+        mixup_alpha: float = 0.0,
+        cutmix_alpha: float = 0.0,
     ) -> None:
         # Normalise device to a plain type string (e.g. "cuda", "cpu")
         # so that torch.amp.autocast and GradScaler work with "cuda:0" etc.
@@ -175,6 +177,24 @@ class EuroSATTrainer:
         self.blur_loss_frequency = blur_loss_frequency
         self.class_rarity = class_rarity
         self.temperature_dynamics: List[Dict[str, float]] = []
+
+        # MixUp / CutMix augmentation (applied at batch level)
+        self.mixup_fn = None
+        if mixup_alpha > 0 or cutmix_alpha > 0:
+            try:
+                from timm.data.mixup import Mixup
+                self.mixup_fn = Mixup(
+                    mixup_alpha=mixup_alpha,
+                    cutmix_alpha=cutmix_alpha,
+                    prob=1.0,
+                    switch_prob=0.5,
+                    mode="batch",
+                    label_smoothing=0.1,
+                    num_classes=getattr(model, "num_classes", 10),
+                )
+                print(f"[EuroSATTrainer] MixUp(alpha={mixup_alpha}) + CutMix(alpha={cutmix_alpha}) enabled")
+            except ImportError:
+                print("[EuroSATTrainer] timm not available — MixUp/CutMix disabled")
 
         # Set up components (use provided or create defaults).
         self.optimizer = optimizer or self._setup_optimizer()
@@ -346,7 +366,7 @@ class EuroSATTrainer:
     def train(
         self,
         num_epochs: int,
-        patience: int = 10,
+        patience: int = 20,
     ) -> Dict[str, float]:
         """Run the full training loop.
 
@@ -488,6 +508,16 @@ class EuroSATTrainer:
             images = images.to(self.device, non_blocking=True)
             targets = targets.to(self.device, non_blocking=True)
 
+            # Store original hard targets for accuracy tracking
+            hard_targets = targets.clone()
+
+            # Apply MixUp / CutMix (only for non-decomposed paths to keep
+            # decomposition augmentation logic self-contained)
+            mixed = False
+            if self.mixup_fn is not None and not self.use_decomposition:
+                images, targets = self.mixup_fn(images, targets)
+                mixed = True
+
             # Compute training progress for temperature annealing.
             training_progress: float = 0.0
             if self.temp_scheduler is not None:
@@ -497,7 +527,7 @@ class EuroSATTrainer:
             with torch.amp.autocast(self.device, enabled=self.use_amp):
                 if self.use_decomposition:
                     loss, outputs = self._decomposed_forward(
-                        images, targets, training_progress, batch_idx
+                        images, hard_targets, training_progress, batch_idx
                     )
                 elif self.lambda_ucat > 0:
                     outputs, temperatures = self.model(
@@ -505,14 +535,31 @@ class EuroSATTrainer:
                         training_progress=training_progress,
                         return_temperatures=True,
                     )
-                    loss, task_loss, ucat_loss = self.criterion(
-                        outputs, targets, temperatures
-                    )
+                    if mixed:
+                        # MixUp targets are soft — use cross-entropy with soft labels
+                        task_loss = -torch.sum(
+                            targets * torch.log_softmax(outputs, dim=-1), dim=-1
+                        ).mean()
+                        from .losses import UCATLoss
+                        ucat_loss = UCATLoss.compute_negative_correlation(
+                            temperatures,
+                            -(targets * torch.log_softmax(outputs, dim=-1)).sum(-1),
+                        )
+                        loss = task_loss + self.lambda_ucat * ucat_loss
+                    else:
+                        loss, task_loss, ucat_loss = self.criterion(
+                            outputs, targets, temperatures
+                        )
                 else:
                     outputs = self.model(
                         images, training_progress=training_progress
                     )
-                    loss = self.criterion(outputs, targets)
+                    if mixed:
+                        loss = -torch.sum(
+                            targets * torch.log_softmax(outputs, dim=-1), dim=-1
+                        ).mean()
+                    else:
+                        loss = self.criterion(outputs, targets)
 
             # Backward pass.
             self.optimizer.zero_grad(set_to_none=True)
@@ -536,11 +583,11 @@ class EuroSATTrainer:
             if self.temp_scheduler is not None:
                 self.temp_scheduler.step()
 
-            # Accumulate statistics.
-            batch_size = targets.size(0)
+            # Accumulate statistics (always use hard targets for accuracy).
+            batch_size = hard_targets.size(0)
             running_loss += loss.item() * batch_size
             _, predicted = outputs.max(dim=1)
-            correct += predicted.eq(targets).sum().item()
+            correct += predicted.eq(hard_targets).sum().item()
             total += batch_size
 
         epoch_loss = running_loss / max(total, 1)
@@ -644,7 +691,10 @@ class EuroSATTrainer:
 
             with torch.amp.autocast(self.device, enabled=self.use_amp):
                 outputs = self.model(images)
-                if self.lambda_ucat > 0:
+                if self.use_decomposition:
+                    # For validation, just compute task loss (no decomposition extras)
+                    loss = nn.functional.cross_entropy(outputs, targets, label_smoothing=0.1)
+                elif self.lambda_ucat > 0:
                     loss, _, _ = self.criterion(outputs, targets)
                 else:
                     loss = self.criterion(outputs, targets)

@@ -43,10 +43,18 @@ def parse_args():
                         help='Input image size')
     parser.add_argument('--batch_size', type=int, default=64,
                         help='Training batch size')
-    parser.add_argument('--epochs', type=int, default=100,
+    parser.add_argument('--epochs', type=int, default=200,
                         help='Number of training epochs')
-    parser.add_argument('--lr', type=float, default=1e-4,
+    parser.add_argument('--lr', type=float, default=5e-4,
                         help='Learning rate')
+    parser.add_argument('--pretrained', action='store_true', default=True,
+                        help='Load ImageNet-pretrained ViT-Tiny weights (default: True)')
+    parser.add_argument('--no_pretrained', action='store_true',
+                        help='Disable pretrained weight loading (train from scratch)')
+    parser.add_argument('--mixup_alpha', type=float, default=0.8,
+                        help='MixUp alpha (0 to disable)')
+    parser.add_argument('--cutmix_alpha', type=float, default=1.0,
+                        help='CutMix alpha (0 to disable)')
     parser.add_argument('--weight_decay', type=float, default=0.05,
                         help='Weight decay for optimizer')
     parser.add_argument('--data_root', type=str, default='./data',
@@ -141,6 +149,7 @@ def generate_experiment_name(args):
 def build_model(args, device):
     """Build the model based on command-line arguments."""
     num_classes = 10  # EuroSAT has 10 classes
+    use_pretrained = args.pretrained and not args.no_pretrained
 
     if args.model == 'efficient_eurosat':
         model = EfficientEuroSATViT(
@@ -157,11 +166,17 @@ def build_model(args, device):
             exit_min_layer=args.exit_min_layer,
             use_decomposition=args.use_decomposition,
         )
+        if use_pretrained:
+            from src.models.pretrained import load_pretrained_efficient
+            load_pretrained_efficient(model)
     elif args.model == 'baseline':
         model = BaselineViT(
             img_size=args.img_size,
             num_classes=num_classes,
         )
+        if use_pretrained:
+            from src.models.pretrained import load_pretrained_baseline
+            load_pretrained_baseline(model)
     else:
         raise ValueError(f"Unknown model type: {args.model}")
 
@@ -252,6 +267,8 @@ def main():
         lambda_epistemic=args.lambda_epistemic,
         blur_loss_frequency=args.blur_loss_frequency,
         class_rarity=class_rarity,
+        mixup_alpha=args.mixup_alpha,
+        cutmix_alpha=args.cutmix_alpha,
     )
 
     # Train
