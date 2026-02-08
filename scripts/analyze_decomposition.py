@@ -396,24 +396,55 @@ def main():
     print(f"  dCor       = {dcor_val:.4f}  (p={dcor_p:.4f}, "
           f"n={len(tau_a_sub)}, perms={args.n_dcor_perms})")
 
-    # Summary verdict
-    passes_pearson = abs(pearson_r) < 0.3 and pearson_p > 0.01
-    passes_spearman = abs(spearman_rho) < 0.3 and spearman_p > 0.01
-    passes_dcor = dcor_val < 0.3 and dcor_p > 0.05
+    # Summary verdict with Bonferroni correction for 3 independence tests
+    # Family-wise alpha = 0.05, per-test threshold = 0.05 / 3 = 0.0167
+    n_independence_tests = 3
+    alpha_family = 0.05
+    alpha_per_test = alpha_family / n_independence_tests  # 0.0167
+
+    # Bonferroni-corrected p-values
+    pearson_p_corrected = min(pearson_p * n_independence_tests, 1.0)
+    spearman_p_corrected = min(spearman_p * n_independence_tests, 1.0)
+    dcor_p_corrected = min(dcor_p * n_independence_tests, 1.0)
+
+    # Pass criteria: effect size small AND corrected p non-significant
+    passes_pearson = abs(pearson_r) < 0.3 and pearson_p_corrected > alpha_family
+    passes_spearman = abs(spearman_rho) < 0.3 and spearman_p_corrected > alpha_family
+    passes_dcor = dcor_val < 0.3 and dcor_p_corrected > alpha_family
     overall_pass = passes_pearson and passes_spearman and passes_dcor
 
+    independence_tests['bonferroni'] = {
+        'n_tests': n_independence_tests,
+        'alpha_family': alpha_family,
+        'alpha_per_test': alpha_per_test,
+        'pearson_p_corrected': float(pearson_p_corrected),
+        'spearman_p_corrected': float(spearman_p_corrected),
+        'dcor_p_corrected': float(dcor_p_corrected),
+    }
     independence_tests['verdict'] = {
         'pearson_pass': passes_pearson,
         'spearman_pass': passes_spearman,
         'dcor_pass': passes_dcor,
         'overall_independence': overall_pass,
-        'criteria': '|r| < 0.3 AND |rho| < 0.3 AND dCor < 0.3',
+        'criteria': (
+            f'|r| < 0.3 AND |rho| < 0.3 AND dCor < 0.3; '
+            f'p-values Bonferroni-corrected (k={n_independence_tests}, '
+            f'alpha_family={alpha_family})'
+        ),
     }
     verdict_str = "PASS" if overall_pass else "FAIL"
     print(f"\n  Independence verdict: {verdict_str}")
-    print(f"    Pearson |r|<0.3:  {'PASS' if passes_pearson else 'FAIL'}")
-    print(f"    Spearman |rho|<0.3: {'PASS' if passes_spearman else 'FAIL'}")
-    print(f"    dCor <0.3:        {'PASS' if passes_dcor else 'FAIL'}")
+    print(f"    (Bonferroni-corrected for k={n_independence_tests} tests, "
+          f"alpha_family={alpha_family})")
+    print(f"    Pearson  |r|<0.3 & p_corr>{alpha_family}:  "
+          f"{'PASS' if passes_pearson else 'FAIL'} "
+          f"(|r|={abs(pearson_r):.4f}, p_corr={pearson_p_corrected:.4f})")
+    print(f"    Spearman |rho|<0.3 & p_corr>{alpha_family}: "
+          f"{'PASS' if passes_spearman else 'FAIL'} "
+          f"(|rho|={abs(spearman_rho):.4f}, p_corr={spearman_p_corrected:.4f})")
+    print(f"    dCor     <0.3 & p_corr>{alpha_family}:     "
+          f"{'PASS' if passes_dcor else 'FAIL'} "
+          f"(dCor={dcor_val:.4f}, p_corr={dcor_p_corrected:.4f})")
 
     # ==================================================================
     # Blur response
@@ -449,12 +480,12 @@ def main():
     ax.set_xlabel(r'$\tau_a$ (Aleatoric)', fontsize=11)
     ax.set_ylabel(r'$\tau_e$ (Epistemic)', fontsize=11)
 
-    # Annotation box with all three test results
+    # Annotation box with all three test results (Bonferroni-corrected)
     textstr = (
-        f"Pearson r = {pearson_r:.3f} (p={pearson_p:.2e})\n"
-        f"Spearman $\\rho$ = {spearman_rho:.3f} (p={spearman_p:.2e})\n"
-        f"dCor = {dcor_val:.3f} (p={dcor_p:.3f})\n"
-        f"Independence: {verdict_str}"
+        f"Pearson r = {pearson_r:.3f} ($p_{{corr}}$={pearson_p_corrected:.2e})\n"
+        f"Spearman $\\rho$ = {spearman_rho:.3f} ($p_{{corr}}$={spearman_p_corrected:.2e})\n"
+        f"dCor = {dcor_val:.3f} ($p_{{corr}}$={dcor_p_corrected:.3f})\n"
+        f"Independence: {verdict_str} (Bonferroni k={n_independence_tests})"
     )
     props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
     ax.text(0.03, 0.97, textstr, transform=ax.transAxes, fontsize=8,

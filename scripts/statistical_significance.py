@@ -321,6 +321,44 @@ def effect_size_label(d):
     return 'large'
 
 
+def bootstrap_cohens_d_ci(accs_a, accs_b, n_bootstrap=10000, ci=0.95, rng=None):
+    """Compute bootstrap CI for Cohen's d_z (paired effect size).
+
+    Parameters
+    ----------
+    accs_a, accs_b : np.ndarray
+        Paired accuracy arrays.
+    n_bootstrap : int
+        Number of bootstrap resamples.
+    ci : float
+        Confidence level.
+    rng : np.random.Generator or None
+        Random number generator.
+
+    Returns
+    -------
+    tuple of (float, float)
+        (lower_bound, upper_bound) of the CI for Cohen's d.
+    """
+    n = len(accs_a)
+    if n < 2:
+        d = cohens_d(accs_a, accs_b)
+        return d, d
+
+    if rng is None:
+        rng = np.random.default_rng(42)
+
+    boot_ds = np.empty(n_bootstrap)
+    for i in range(n_bootstrap):
+        idx = rng.choice(n, size=n, replace=True)
+        boot_ds[i] = cohens_d(accs_a[idx], accs_b[idx])
+
+    alpha = 1.0 - ci
+    lower = float(np.percentile(boot_ds, 100 * alpha / 2))
+    upper = float(np.percentile(boot_ds, 100 * (1 - alpha / 2)))
+    return lower, upper
+
+
 def bootstrap_ci(accs, n_bootstrap=10000, ci=0.95, rng=None):
     """Compute bootstrap confidence interval for the mean.
 
@@ -357,6 +395,70 @@ def bootstrap_ci(accs, n_bootstrap=10000, ci=0.95, rng=None):
     lower = float(np.percentile(boot_means, 100 * alpha / 2))
     upper = float(np.percentile(boot_means, 100 * (1 - alpha / 2)))
     return lower, upper
+
+
+def compute_posthoc_power(d, n, alpha=0.05):
+    """Compute approximate post-hoc power for a paired t-test.
+
+    Uses the non-central t-distribution approximation:
+        ncp = |d| * sqrt(n)
+        power = P(|T| > t_crit | ncp)
+
+    Parameters
+    ----------
+    d : float
+        Cohen's d_z effect size.
+    n : int
+        Number of paired observations.
+    alpha : float
+        Significance level (two-tailed).
+
+    Returns
+    -------
+    float
+        Statistical power in [0, 1].
+    """
+    if np.isnan(d) or n < 2:
+        return float('nan')
+
+    from scipy.stats import t as t_dist
+
+    df = n - 1
+    t_crit = t_dist.ppf(1 - alpha / 2, df)
+    ncp = abs(d) * np.sqrt(n)
+
+    # Power = P(reject H0 | H1 true) using non-central t
+    from scipy.stats import nct
+    power = 1.0 - nct.cdf(t_crit, df, ncp) + nct.cdf(-t_crit, df, ncp)
+    return float(power)
+
+
+def seeds_needed_for_power(d, target_power=0.80, alpha=0.05, max_n=30):
+    """Compute minimum seeds needed to achieve target power.
+
+    Parameters
+    ----------
+    d : float
+        Expected Cohen's d_z effect size.
+    target_power : float
+        Desired statistical power (default 0.80).
+    alpha : float
+        Significance level (two-tailed).
+    max_n : int
+        Maximum n to search.
+
+    Returns
+    -------
+    int or None
+        Minimum n needed, or None if > max_n.
+    """
+    if np.isnan(d) or abs(d) < 1e-10:
+        return None
+    for n in range(2, max_n + 1):
+        power = compute_posthoc_power(d, n, alpha)
+        if power >= target_power:
+            return n
+    return None
 
 
 def bonferroni_correct(p_value, n_comparisons):
@@ -469,6 +571,14 @@ def run_comparisons(seed_groups, dataset='eurosat', n_bootstrap=10000):
         diffs = accs_a - accs_b
         ci_lower, ci_upper = bootstrap_ci(diffs, n_bootstrap=n_bootstrap, rng=rng)
 
+        # Bootstrap CI on Cohen's d
+        d_ci_lower, d_ci_upper = bootstrap_cohens_d_ci(
+            accs_a, accs_b, n_bootstrap=n_bootstrap, rng=rng,
+        )
+
+        # Post-hoc power analysis (paired t-test, two-tailed, alpha=0.05)
+        power = compute_posthoc_power(d, len(common_seeds))
+
         comparison_results.append({
             'method_a': method_a,
             'method_b': method_b,
@@ -486,7 +596,10 @@ def run_comparisons(seed_groups, dataset='eurosat', n_bootstrap=10000):
             'marker_raw': significance_marker(p_raw),
             'marker_corrected': significance_marker(p_corrected),
             'cohens_d': d,
+            'cohens_d_ci_lower': d_ci_lower,
+            'cohens_d_ci_upper': d_ci_upper,
             'effect_label': effect_size_label(d),
+            'posthoc_power': power,
             'n_comparisons_bonferroni': n_total_comparisons,
         })
 
@@ -525,11 +638,11 @@ def generate_latex_table(method_stats, comparisons_vs_baseline, dataset='eurosat
         + r' comparisons.}'
     )
     lines.append(r'  \label{tab:significance_' + dataset + r'}')
-    lines.append(r'  \begin{tabular}{lccccc}')
+    lines.append(r'  \begin{tabular}{lcccc}')
     lines.append(r'    \toprule')
     lines.append(
-        r'    Method & Accuracy (\%) & 95\% CI & '
-        r"Cohen's $d$ & $p_{\mathrm{corr}}$ \\"
+        r'    Method & Accuracy (\%) & '
+        r"Cohen's $d$ [95\% CI] & $p_{\mathrm{corr}}$ & Power \\"
     )
     lines.append(r'    \midrule')
 
@@ -547,21 +660,18 @@ def generate_latex_table(method_stats, comparisons_vs_baseline, dataset='eurosat
         std_pct = stats['std'] * 100 if stats['mean'] <= 1.0 else stats['std']
         acc_str = f'{mean_pct:.2f} $\\pm$ {std_pct:.2f}'
 
-        # CI
-        ci_l = stats.get('ci_lower', stats['mean'])
-        ci_u = stats.get('ci_upper', stats['mean'])
-        ci_l_pct = ci_l * 100 if ci_l <= 1.0 else ci_l
-        ci_u_pct = ci_u * 100 if ci_u <= 1.0 else ci_u
-        ci_str = f'[{ci_l_pct:.2f}, {ci_u_pct:.2f}]'
-
         if method == 'baseline':
             d_str = '---'
             p_str = '---'
+            pwr_str = '---'
         elif method in comparisons_vs_baseline:
             comp = comparisons_vs_baseline[method]
             p_corr = comp['p_value_corrected']
             marker = comp['marker_corrected']
             d_val = comp['cohens_d']
+            d_ci_lo = comp.get('cohens_d_ci_lower', float('nan'))
+            d_ci_hi = comp.get('cohens_d_ci_upper', float('nan'))
+            power = comp.get('posthoc_power', float('nan'))
 
             if np.isnan(p_corr):
                 p_str = 'N/A'
@@ -571,13 +681,19 @@ def generate_latex_table(method_stats, comparisons_vs_baseline, dataset='eurosat
             if np.isnan(d_val):
                 d_str = 'N/A'
             else:
-                d_str = f'{d_val:.3f}'
+                d_str = f'{d_val:.2f} [{d_ci_lo:.2f}, {d_ci_hi:.2f}]'
+
+            if np.isnan(power):
+                pwr_str = 'N/A'
+            else:
+                pwr_str = f'{power:.2f}'
         else:
             d_str = 'N/A'
             p_str = 'N/A'
+            pwr_str = 'N/A'
 
         method_tex = method.replace('_', r'\_')
-        lines.append(f'    {method_tex} & {acc_str} & {ci_str} & {d_str} & {p_str} \\\\')
+        lines.append(f'    {method_tex} & {acc_str} & {d_str} & {p_str} & {pwr_str} \\\\')
 
     lines.append(r'    \bottomrule')
     lines.append(r'  \end{tabular}')
@@ -585,9 +701,12 @@ def generate_latex_table(method_stats, comparisons_vs_baseline, dataset='eurosat
     lines.append(
         r'  \raggedright\footnotesize '
         r'Significance: {*}\,$p<0.05$, {**}\,$p<0.01$, {***}\,$p<0.001$ '
-        r'(Bonferroni-corrected). '
-        r"Cohen's $d$: $|d|<0.2$ negligible, $<0.5$ small, $<0.8$ medium, "
-        r'$\geq0.8$ large.'
+        r'(Bonferroni-corrected for $k='
+        + str(len(KEY_COMPARISONS))
+        + r'$ comparisons). '
+        r"Cohen's $d_z$ (paired): $|d|<0.2$ negligible, $<0.5$ small, "
+        r'$<0.8$ medium, $\geq0.8$ large; 95\% CI via 10{,}000 bootstrap '
+        r'resamples. Power: post-hoc via non-central $t$-distribution.'
     )
     lines.append(r'\end{table}')
 
@@ -601,16 +720,17 @@ def generate_latex_table(method_stats, comparisons_vs_baseline, dataset='eurosat
 def print_results_table(method_stats, comparisons_vs_baseline):
     """Print a formatted results table to stdout."""
     print()
-    print('=' * 100)
+    print('=' * 130)
     print('STATISTICAL SIGNIFICANCE RESULTS')
-    print('=' * 100)
+    print('=' * 130)
 
     header = (
-        f"{'Method':<25} {'Acc (mean +/- std)':>22} "
-        f"{'95% CI':>18} {'Cohen d':>10} {'p(raw)':>10} {'p(corr)':>10} {'Sig':>5}"
+        f"{'Method':<25} {'Acc (mean+/-std)':>22} "
+        f"{'95% CI':>18} {'Cohen d [95% CI]':>24} "
+        f"{'p(corr)':>10} {'Power':>7} {'Sig':>5}"
     )
     print(header)
-    print('-' * 100)
+    print('-' * 130)
 
     sorted_methods = sorted(method_stats.keys())
     if 'baseline' in sorted_methods:
@@ -634,33 +754,41 @@ def print_results_table(method_stats, comparisons_vs_baseline):
 
         if method == 'baseline':
             d_str = '---'
-            p_raw_str = '---'
             p_corr_str = '---'
+            pwr_str = '---'
             sig = ''
         elif method in comparisons_vs_baseline:
             comp = comparisons_vs_baseline[method]
-            p_raw = comp['p_value_raw']
             p_corr = comp['p_value_corrected']
             d_val = comp['cohens_d']
+            d_ci_lo = comp.get('cohens_d_ci_lower', float('nan'))
+            d_ci_hi = comp.get('cohens_d_ci_upper', float('nan'))
+            power = comp.get('posthoc_power', float('nan'))
             sig = comp['marker_corrected']
 
-            p_raw_str = f'{p_raw:.4f}' if not np.isnan(p_raw) else 'N/A'
             p_corr_str = f'{p_corr:.4f}' if not np.isnan(p_corr) else 'N/A'
-            d_str = f'{d_val:.3f}' if not np.isnan(d_val) else 'N/A'
+
+            if np.isnan(d_val):
+                d_str = 'N/A'
+            else:
+                d_str = f'{d_val:.2f} [{d_ci_lo:.2f},{d_ci_hi:.2f}]'
+
+            pwr_str = f'{power:.2f}' if not np.isnan(power) else 'N/A'
         else:
             d_str = 'N/A'
-            p_raw_str = 'N/A'
             p_corr_str = 'N/A'
+            pwr_str = 'N/A'
             sig = ''
 
         print(
             f'{method:<25} {acc_str:>22} {ci_str:>18} '
-            f'{d_str:>10} {p_raw_str:>10} {p_corr_str:>10} {sig:>5}'
+            f'{d_str:>24} {p_corr_str:>10} {pwr_str:>7} {sig:>5}'
         )
 
-    print('=' * 100)
+    print('=' * 130)
     print('Significance: * p<0.05, ** p<0.01, *** p<0.001 (Bonferroni-corrected)')
-    print("Cohen's d: |d|<0.2 negligible, <0.5 small, <0.8 medium, >=0.8 large")
+    print("Cohen's d_z (paired): |d|<0.2 negligible, <0.5 small, <0.8 medium, >=0.8 large")
+    print('Power: post-hoc via non-central t-distribution (target >= 0.80)')
     print()
 
 
@@ -672,38 +800,62 @@ def print_comparisons(comparisons):
 
     print()
     print('PAIRED T-TEST COMPARISONS (seed-matched)')
-    print('-' * 110)
+    print('-' * 140)
     header = (
-        f"{'Comparison':<35} {'Seeds':>10} {'n':>3} "
-        f"{'t-stat':>8} {'p(raw)':>8} {'p(corr)':>8} "
-        f"{'d':>7} {'Effect':>12} {'Sig':>5}"
+        f"{'Comparison':<35} {'n':>3} "
+        f"{'t-stat':>8} {'p(corr)':>8} "
+        f"{'d [95% CI]':>24} {'Effect':>12} {'Power':>7} {'Sig':>5}"
     )
     print(header)
-    print('-' * 110)
+    print('-' * 140)
 
     for comp in comparisons:
         desc = comp['description']
-        seeds_str = str(comp['seeds_used'])
         n = comp['n_pairs']
         t = comp['t_statistic']
-        p_raw = comp['p_value_raw']
         p_corr = comp['p_value_corrected']
         d = comp['cohens_d']
+        d_ci_lo = comp.get('cohens_d_ci_lower', float('nan'))
+        d_ci_hi = comp.get('cohens_d_ci_upper', float('nan'))
         effect = comp['effect_label']
+        power = comp.get('posthoc_power', float('nan'))
         sig = comp['marker_corrected']
 
         t_str = f'{t:.4f}' if not np.isnan(t) else 'N/A'
-        pr_str = f'{p_raw:.4f}' if not np.isnan(p_raw) else 'N/A'
         pc_str = f'{p_corr:.4f}' if not np.isnan(p_corr) else 'N/A'
-        d_str = f'{d:.3f}' if not np.isnan(d) else 'N/A'
+
+        if np.isnan(d):
+            d_str = 'N/A'
+        else:
+            d_str = f'{d:.2f} [{d_ci_lo:.2f},{d_ci_hi:.2f}]'
+
+        pwr_str = f'{power:.2f}' if not np.isnan(power) else 'N/A'
 
         print(
-            f'{desc:<35} {seeds_str:>10} {n:>3} '
-            f'{t_str:>8} {pr_str:>8} {pc_str:>8} '
-            f'{d_str:>7} {effect:>12} {sig:>5}'
+            f'{desc:<35} {n:>3} '
+            f'{t_str:>8} {pc_str:>8} '
+            f'{d_str:>24} {effect:>12} {pwr_str:>7} {sig:>5}'
         )
 
-    print('-' * 110)
+    print('-' * 140)
+
+    # Power analysis summary
+    print()
+    print('POST-HOC POWER ANALYSIS')
+    print('-' * 70)
+    print(f"{'Comparison':<35} {'d':>7} {'n':>3} {'Power':>7} {'n(0.80)':>8}")
+    print('-' * 70)
+    for comp in comparisons:
+        d = comp['cohens_d']
+        n = comp['n_pairs']
+        power = comp.get('posthoc_power', float('nan'))
+        n_needed = seeds_needed_for_power(d) if not np.isnan(d) else None
+        d_str = f'{d:.2f}' if not np.isnan(d) else 'N/A'
+        pwr_str = f'{power:.2f}' if not np.isnan(power) else 'N/A'
+        n_str = str(n_needed) if n_needed is not None else '>30'
+        print(f'{comp["description"]:<35} {d_str:>7} {n:>3} {pwr_str:>7} {n_str:>8}')
+    print('-' * 70)
+    print('n(0.80) = minimum seeds needed for 80% power at observed effect size')
     print()
 
 
@@ -812,6 +964,9 @@ def main():
                 entry['p_value_corrected_vs_baseline'] = comp['p_value_corrected']
                 entry['t_stat_vs_baseline'] = comp['t_statistic']
                 entry['cohens_d_vs_baseline'] = comp['cohens_d']
+                entry['cohens_d_ci_lower'] = comp.get('cohens_d_ci_lower', float('nan'))
+                entry['cohens_d_ci_upper'] = comp.get('cohens_d_ci_upper', float('nan'))
+                entry['posthoc_power'] = comp.get('posthoc_power', float('nan'))
                 entry['effect_label_vs_baseline'] = comp['effect_label']
                 entry['significance_raw'] = comp['marker_raw']
                 entry['significance_corrected'] = comp['marker_corrected']
