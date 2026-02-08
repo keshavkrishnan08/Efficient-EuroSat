@@ -1,0 +1,39 @@
+# Data (top-level only, not src/data/)
+/data/
+*.zip
+*.tar.gz
+
+# Checkpoints and results (generated at runtime)
+checkpoints/
+results/
+analysis_results/
+figures/
+pipeline_summary.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment
+.env
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+wandb/

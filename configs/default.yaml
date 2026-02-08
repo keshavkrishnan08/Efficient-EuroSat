@@ -1,0 +1,68 @@
+# EfficientEuroSAT Default Configuration
+# Training
+training:
+  epochs: 100
+  batch_size: 64
+  lr: 1.0e-4
+  weight_decay: 0.05
+  warmup_epochs: 5
+  min_lr: 1.0e-6
+  label_smoothing: 0.1
+  grad_clip_norm: 1.0
+  use_amp: true
+  num_workers: 4
+  patience: 10
+
+# Model
+model:
+  name: efficient_eurosat_tiny
+  img_size: 224
+  patch_size: 16
+  embed_dim: 192
+  num_layers: 12
+  num_heads: 3
+  mlp_ratio: 4
+  num_classes: 10
+  drop_rate: 0.1
+
+# Attention Modifications
+modifications:
+  use_learned_temp: true
+  use_early_exit: true
+  use_learned_dropout: true
+  use_learned_residual: true
+  use_temp_annealing: true
+  tau_min: 0.1
+  dropout_max: 0.3
+  exit_threshold: 0.9
+  exit_min_layer: 4
+  tau_max_mult: 1.5
+  tau_min_mult: 1.0
+  annealing_power: 2
+
+# Data
+data:
+  root: ./data
+  img_size: 224
+  val_split: 0.1
+  use_weighted_sampling: true
+
+# Augmentation
+augmentation:
+  random_crop: true
+  random_rotation: 15
+  color_jitter: 0.3
+  random_affine: true
+  gaussian_blur: true
+  random_perspective: true
+
+# Logging
+logging:
+  use_wandb: false
+  wandb_project: efficient_eurosat
+  save_dir: ./checkpoints
+  results_dir: ./results
+  log_interval: 50
+
+# Reproducibility
+seed: 42

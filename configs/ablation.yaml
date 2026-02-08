@@ -1,0 +1,105 @@
+# Ablation Study Configurations
+seeds: [42, 123, 456]
+
+# Override training for ablation (fewer epochs for speed during development)
+training:
+  epochs: 100
+  batch_size: 64
+
+# Experiment configurations
+experiments:
+  - name: baseline
+    modifications:
+      use_learned_temp: false
+      use_early_exit: false
+      use_learned_dropout: false
+      use_learned_residual: false
+      use_temp_annealing: false
+
+  - name: mod1_only
+    modifications:
+      use_learned_temp: true
+      use_early_exit: false
+      use_learned_dropout: false
+      use_learned_residual: false
+      use_temp_annealing: false
+
+  - name: mod2_only
+    modifications:
+      use_learned_temp: false
+      use_early_exit: true
+      use_learned_dropout: false
+      use_learned_residual: false
+      use_temp_annealing: false
+
+  - name: mod3_only
+    modifications:
+      use_learned_temp: false
+      use_early_exit: false
+      use_learned_dropout: true
+      use_learned_residual: false
+      use_temp_annealing: false
+
+  - name: mod4_only
+    modifications:
+      use_learned_temp: false
+      use_early_exit: false
+      use_learned_dropout: false
+      use_learned_residual: true
+      use_temp_annealing: false
+
+  - name: mod5_only
+    modifications:
+      use_learned_temp: false
+      use_early_exit: false
+      use_learned_dropout: false
+      use_learned_residual: false
+      use_temp_annealing: true
+
+  - name: all_mods
+    modifications:
+      use_learned_temp: true
+      use_early_exit: true
+      use_learned_dropout: true
+      use_learned_residual: true
+      use_temp_annealing: true
+
+  - name: all_minus_mod1
+    modifications:
+      use_learned_temp: false
+      use_early_exit: true
+      use_learned_dropout: true
+      use_learned_residual: true
+      use_temp_annealing: true
+
+  - name: all_minus_mod2
+    modifications:
+      use_learned_temp: true
+      use_early_exit: false
+      use_learned_dropout: true
+      use_learned_residual: true
+      use_temp_annealing: true
+
+  - name: all_minus_mod3
+    modifications:
+      use_learned_temp: true
+      use_early_exit: true
+      use_learned_dropout: false
+      use_learned_residual: true
+      use_temp_annealing: true
+
+  - name: all_minus_mod4
+    modifications:
+      use_learned_temp: true
+      use_early_exit: true
+      use_learned_dropout: true
+      use_learned_residual: false
+      use_temp_annealing: true
+
+  - name: all_minus_mod5
+    modifications:
+      use_learned_temp: true
+      use_early_exit: true
+      use_learned_dropout: true
+      use_learned_residual: true
+      use_temp_annealing: false

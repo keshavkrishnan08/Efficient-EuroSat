@@ -1,0 +1,22 @@
+# Deployment Configuration
+inference:
+  batch_size: 1
+  device: cuda
+  use_amp: true
+  early_exit: true
+  exit_threshold: 0.9
+  exit_min_layer: 4
+
+onnx:
+  opset_version: 14
+  dynamic_axes: true
+
+tensorrt:
+  fp16: true
+  max_batch_size: 8
+  workspace_size_gb: 2
+
+benchmarking:
+  num_warmup: 50
+  num_runs: 200
+  devices: [cuda, cpu]
