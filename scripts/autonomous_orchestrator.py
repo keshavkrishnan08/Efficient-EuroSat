@@ -2,12 +2,15 @@
 """
 Autonomous self-tuning training orchestrator for EfficientEuroSAT.
 
-Trains all experiments, checks results against benchmarks, and
-automatically adjusts hyperparameters and retrains when targets
-are not met.  Designed for a single unattended GPU session.
+Trains all 35 experiments across multiple datasets, architectures, and seeds.
+Checks results against benchmarks, automatically adjusts hyperparameters and
+retrains when targets are not met. Runs all evaluations, uncertainty method
+comparisons, statistical significance tests, and figure generation.
+
+Designed for a single unattended GPU session.
 
 Usage:
-    python scripts/autonomous_orchestrator.py --epochs 100 --data_root ./data
+    python scripts/autonomous_orchestrator.py --epochs 200 --data_root ./data
 """
 
 import argparse
@@ -42,10 +45,9 @@ MAX_RETRIES = 3
 
 # Hyperparameter adjustment strategies
 ADJUSTMENTS = [
-    # (condition, parameter changes, description)
     {
         "condition": "accuracy_low",
-        "changes": {"lr": 2.0},   # multiply
+        "changes": {"lr": 2.0},
         "description": "Double learning rate",
     },
     {
@@ -74,6 +76,9 @@ ADJUSTMENTS = [
         "description": "Reduce UCAT loss weight",
     },
 ]
+
+# Datasets used in multi-dataset experiments
+DATASETS = ["eurosat", "cifar100", "resisc45"]
 
 
 # ======================================================================
@@ -184,13 +189,11 @@ def diagnose_issues(results, baseline_acc):
     train_results = results.get("training", {})
     best_val_acc = train_results.get("best_val_acc", 0)
 
-    # Check accuracy
     if test_acc is not None and baseline_acc is not None:
         if test_acc < baseline_acc:
             issues.append("accuracy_low")
 
-    # Check overfitting
-    train_acc_approx = best_val_acc  # Use val as proxy
+    train_acc_approx = best_val_acc
     if test_acc is not None and train_acc_approx > 0:
         gap = train_acc_approx - test_acc
         if gap > 0.15:
@@ -201,9 +204,8 @@ def diagnose_issues(results, baseline_acc):
 
 def adjust_hyperparams(base_flags, issues, retry_num):
     """Apply hyperparameter adjustments based on diagnosed issues."""
-    flags = list(base_flags)  # copy
+    flags = list(base_flags)
 
-    # Map flags to dict for easy modification
     flag_dict = {}
     i = 0
     while i < len(flags):
@@ -216,9 +218,6 @@ def adjust_hyperparams(base_flags, issues, retry_num):
             flag_dict[flags[i]] = None
             i += 1
 
-    # Apply adjustments based on retry number and issues
-    adjustment_idx = min(retry_num, len(ADJUSTMENTS) - 1)
-
     for issue in issues:
         for adj in ADJUSTMENTS:
             if adj["condition"] == issue:
@@ -229,9 +228,8 @@ def adjust_hyperparams(base_flags, issues, retry_num):
                         old_val = float(flag_dict[flag_key])
                         new_val = old_val * multiplier
                         flag_dict[flag_key] = str(new_val)
-                break  # one adjustment per issue
+                break
 
-    # Rebuild flags list
     new_flags = []
     for key, val in flag_dict.items():
         new_flags.append(key)
@@ -241,21 +239,43 @@ def adjust_hyperparams(base_flags, issues, retry_num):
     return new_flags
 
 
+def _get_dataset_for_experiment(exp):
+    """Extract the dataset from experiment flags. Default: eurosat."""
+    flags = exp.get("flags", [])
+    for i, f in enumerate(flags):
+        if f == "--dataset" and i + 1 < len(flags):
+            return flags[i + 1]
+    return "eurosat"
+
+
 # ======================================================================
-# Experiments Definition
+# Experiments Definition — All 35 experiments
 # ======================================================================
 
 def get_experiments():
-    """Return ordered list of experiments to run."""
+    """Return ordered list of all 35 experiments to run."""
     return [
-        # Phase 1: Baseline (no retries)
+        # ---- Phase 1: EuroSAT Baselines (3 seeds for ensemble) ----
         {
             "name": "baseline",
             "flags": ["--model", "baseline", "--seed", "42"],
             "retry": False,
             "phase": "baseline",
         },
-        # Phase 2: All-combined with decomposition (main model, retries OK)
+        {
+            "name": "baseline_s123",
+            "flags": ["--model", "baseline", "--seed", "123"],
+            "retry": False,
+            "phase": "baseline",
+        },
+        {
+            "name": "baseline_s456",
+            "flags": ["--model", "baseline", "--seed", "456"],
+            "retry": False,
+            "phase": "baseline",
+        },
+
+        # ---- Phase 2: Main decomposed model (retries OK) ----
         {
             "name": "decomp_with_losses",
             "flags": [
@@ -269,7 +289,8 @@ def get_experiments():
             "retry": True,
             "phase": "main",
         },
-        # Phase 3: Original ablations
+
+        # ---- Phase 3: EuroSAT ablations (seed 42) ----
         {
             "name": "ucat_only",
             "flags": [
@@ -361,7 +382,6 @@ def get_experiments():
             "retry": False,
             "phase": "ablation",
         },
-        # Phase 4: Decomposition ablations
         {
             "name": "decomp_input_dep_only",
             "flags": [
@@ -388,6 +408,92 @@ def get_experiments():
             "retry": False,
             "phase": "decomp_ablation",
         },
+
+        # ---- Phase 3b: 3-seed coverage for ablations ----
+        {"name": "ucat_only_s123", "flags": [
+            "--model", "efficient_eurosat", "--no_early_exit", "--no_learned_dropout",
+            "--no_learned_residual", "--no_temp_annealing", "--lambda_ucat", "0.1", "--seed", "123"],
+            "retry": False, "phase": "ablation_seeds"},
+        {"name": "ucat_only_s456", "flags": [
+            "--model", "efficient_eurosat", "--no_early_exit", "--no_learned_dropout",
+            "--no_learned_residual", "--no_temp_annealing", "--lambda_ucat", "0.1", "--seed", "456"],
+            "retry": False, "phase": "ablation_seeds"},
+        {"name": "early_exit_only_s123", "flags": [
+            "--model", "efficient_eurosat", "--no_learned_temp", "--no_learned_dropout",
+            "--no_learned_residual", "--no_temp_annealing", "--lambda_ucat", "0.0", "--seed", "123"],
+            "retry": False, "phase": "ablation_seeds"},
+        {"name": "early_exit_only_s456", "flags": [
+            "--model", "efficient_eurosat", "--no_learned_temp", "--no_learned_dropout",
+            "--no_learned_residual", "--no_temp_annealing", "--lambda_ucat", "0.0", "--seed", "456"],
+            "retry": False, "phase": "ablation_seeds"},
+        {"name": "dropout_only_s123", "flags": [
+            "--model", "efficient_eurosat", "--no_learned_temp", "--no_early_exit",
+            "--no_learned_residual", "--no_temp_annealing", "--lambda_ucat", "0.0", "--seed", "123"],
+            "retry": False, "phase": "ablation_seeds"},
+        {"name": "dropout_only_s456", "flags": [
+            "--model", "efficient_eurosat", "--no_learned_temp", "--no_early_exit",
+            "--no_learned_residual", "--no_temp_annealing", "--lambda_ucat", "0.0", "--seed", "456"],
+            "retry": False, "phase": "ablation_seeds"},
+        {"name": "residual_only_s123", "flags": [
+            "--model", "efficient_eurosat", "--no_learned_temp", "--no_early_exit",
+            "--no_learned_dropout", "--no_temp_annealing", "--lambda_ucat", "0.0", "--seed", "123"],
+            "retry": False, "phase": "ablation_seeds"},
+        {"name": "residual_only_s456", "flags": [
+            "--model", "efficient_eurosat", "--no_learned_temp", "--no_early_exit",
+            "--no_learned_dropout", "--no_temp_annealing", "--lambda_ucat", "0.0", "--seed", "456"],
+            "retry": False, "phase": "ablation_seeds"},
+        {"name": "annealing_only_s123", "flags": [
+            "--model", "efficient_eurosat", "--no_early_exit", "--no_learned_dropout",
+            "--no_learned_residual", "--lambda_ucat", "0.0", "--seed", "123"],
+            "retry": False, "phase": "ablation_seeds"},
+        {"name": "annealing_only_s456", "flags": [
+            "--model", "efficient_eurosat", "--no_early_exit", "--no_learned_dropout",
+            "--no_learned_residual", "--lambda_ucat", "0.0", "--seed", "456"],
+            "retry": False, "phase": "ablation_seeds"},
+        {"name": "decomp_with_losses_s456", "flags": [
+            "--model", "efficient_eurosat", "--use_decomposition", "--lambda_ucat", "0.1",
+            "--lambda_aleatoric", "0.05", "--lambda_epistemic", "0.05", "--seed", "456"],
+            "retry": False, "phase": "ablation_seeds"},
+
+        # ---- Phase 4: Multi-dataset (CIFAR-100 + RESISC45) ----
+        {"name": "cifar100_baseline", "flags": [
+            "--model", "baseline", "--dataset", "cifar100", "--seed", "42"],
+            "retry": False, "phase": "multi_dataset"},
+        {"name": "cifar100_all_combined", "flags": [
+            "--model", "efficient_eurosat", "--dataset", "cifar100",
+            "--lambda_ucat", "0.1", "--seed", "42"],
+            "retry": False, "phase": "multi_dataset"},
+        {"name": "cifar100_decomp", "flags": [
+            "--model", "efficient_eurosat", "--dataset", "cifar100",
+            "--use_decomposition", "--lambda_ucat", "0.1",
+            "--lambda_aleatoric", "0.05", "--lambda_epistemic", "0.05", "--seed", "42"],
+            "retry": False, "phase": "multi_dataset"},
+        {"name": "resisc45_baseline", "flags": [
+            "--model", "baseline", "--dataset", "resisc45", "--seed", "42"],
+            "retry": False, "phase": "multi_dataset"},
+        {"name": "resisc45_all_combined", "flags": [
+            "--model", "efficient_eurosat", "--dataset", "resisc45",
+            "--lambda_ucat", "0.1", "--seed", "42"],
+            "retry": False, "phase": "multi_dataset"},
+        {"name": "resisc45_decomp", "flags": [
+            "--model", "efficient_eurosat", "--dataset", "resisc45",
+            "--use_decomposition", "--lambda_ucat", "0.1",
+            "--lambda_aleatoric", "0.05", "--lambda_epistemic", "0.05", "--seed", "42"],
+            "retry": False, "phase": "multi_dataset"},
+
+        # ---- Phase 5: Multi-architecture (ViT-Small on EuroSAT) ----
+        {"name": "eurosat_baseline_small", "flags": [
+            "--model", "baseline", "--arch", "small", "--seed", "42"],
+            "retry": False, "phase": "multi_arch"},
+        {"name": "eurosat_all_combined_small", "flags": [
+            "--model", "efficient_eurosat", "--arch", "small",
+            "--lambda_ucat", "0.1", "--seed", "42"],
+            "retry": False, "phase": "multi_arch"},
+        {"name": "eurosat_decomp_small", "flags": [
+            "--model", "efficient_eurosat", "--arch", "small",
+            "--use_decomposition", "--lambda_ucat", "0.1",
+            "--lambda_aleatoric", "0.05", "--lambda_epistemic", "0.05", "--seed", "42"],
+            "retry": False, "phase": "multi_arch"},
     ]
 
 
@@ -396,81 +502,98 @@ def get_experiments():
 # ======================================================================
 
 def run_all_evaluations(data_root, batch_size):
-    """Run all evaluation and analysis scripts."""
+    """Run all evaluation and analysis scripts across all datasets."""
     print("\n" + "=" * 72)
     print("  EVALUATION & ANALYSIS PHASE")
     print("=" * 72)
 
-    ckpt_main = "./checkpoints/decomp_with_losses/best_model_val_acc.pt"
-    ckpt_base = "./checkpoints/baseline/best_model_val_acc.pt"
-    ckpt_combined = "./checkpoints/all_combined_s42/best_model_val_acc.pt"
+    # ---- Per-dataset evaluations ----
+    for dataset in DATASETS:
+        print(f"\n  --- Evaluations for dataset: {dataset} ---")
 
-    # 1. Evaluate main decomposed model
-    if os.path.isfile(ckpt_main):
-        run_evaluation_script("evaluate.py", [
-            "--checkpoint", ckpt_main,
-            "--data_root", data_root,
-            "--save_dir", "./analysis_results/main_eval",
-            "--batch_size", str(batch_size),
-        ])
+        # Find checkpoints for this dataset
+        if dataset == "eurosat":
+            ckpt_main = "./checkpoints/decomp_with_losses/best_model_val_acc.pt"
+            ckpt_base = "./checkpoints/baseline/best_model_val_acc.pt"
+            ckpt_combined = "./checkpoints/all_combined_s42/best_model_val_acc.pt"
+        else:
+            ckpt_main = f"./checkpoints/{dataset}_decomp/best_model_val_acc.pt"
+            ckpt_base = f"./checkpoints/{dataset}_baseline/best_model_val_acc.pt"
+            ckpt_combined = f"./checkpoints/{dataset}_all_combined/best_model_val_acc.pt"
 
-    # 2. Evaluate baseline
-    if os.path.isfile(ckpt_base):
-        run_evaluation_script("evaluate.py", [
-            "--checkpoint", ckpt_base,
-            "--data_root", data_root,
-            "--save_dir", "./analysis_results/baseline_eval",
-            "--batch_size", str(batch_size),
-        ])
+        ds_flag = ["--dataset", dataset]
+        suffix = f"_{dataset}" if dataset != "eurosat" else ""
+        results_base = f"./analysis_results{suffix}"
 
-    # 3. Decomposition analysis
-    if os.path.isfile(ckpt_main):
-        run_evaluation_script("analyze_decomposition.py", [
-            "--checkpoint", ckpt_main,
-            "--data_root", data_root,
-            "--save_dir", "./analysis_results/decomposition",
-            "--batch_size", str(batch_size),
-        ])
+        # 1. Evaluate main decomposed model
+        if os.path.isfile(ckpt_main):
+            run_evaluation_script("evaluate.py", [
+                "--checkpoint", ckpt_main,
+                "--data_root", data_root,
+                "--save_dir", f"{results_base}/main_eval",
+                "--batch_size", str(batch_size),
+            ] + ds_flag)
 
-    # 4. UCAT analysis
-    ckpt_for_ucat = ckpt_main if os.path.isfile(ckpt_main) else ckpt_combined
-    if os.path.isfile(ckpt_for_ucat):
-        run_evaluation_script("analyze_ucat.py", [
-            "--checkpoint", ckpt_for_ucat,
-            "--data_root", data_root,
-            "--save_dir", "./analysis_results/ucat",
-            "--batch_size", str(batch_size),
-        ])
+        # 2. Evaluate baseline
+        if os.path.isfile(ckpt_base):
+            run_evaluation_script("evaluate.py", [
+                "--checkpoint", ckpt_base,
+                "--data_root", data_root,
+                "--save_dir", f"{results_base}/baseline_eval",
+                "--batch_size", str(batch_size),
+            ] + ds_flag)
 
-    # 5. OOD detection
-    if os.path.isfile(ckpt_for_ucat):
-        run_evaluation_script("analyze_ood.py", [
-            "--checkpoint", ckpt_for_ucat,
-            "--data_root", data_root,
-            "--save_dir", "./analysis_results/ood",
-            "--batch_size", str(batch_size),
-        ])
+        # 3. Decomposition analysis (only for models with decomposition)
+        if os.path.isfile(ckpt_main):
+            run_evaluation_script("analyze_decomposition.py", [
+                "--checkpoint", ckpt_main,
+                "--data_root", data_root,
+                "--save_dir", f"{results_base}/decomposition",
+                "--batch_size", str(batch_size),
+            ] + ds_flag)
 
-    # 6. Calibration
-    if os.path.isfile(ckpt_for_ucat) and os.path.isfile(ckpt_base):
-        run_evaluation_script("analyze_calibration.py", [
-            "--checkpoint_ucat", ckpt_for_ucat,
-            "--checkpoint_baseline", ckpt_base,
-            "--data_root", data_root,
-            "--save_dir", "./analysis_results/calibration",
-            "--batch_size", str(batch_size),
-        ])
+        # 4. UCAT analysis
+        ckpt_for_ucat = ckpt_main if os.path.isfile(ckpt_main) else ckpt_combined
+        if os.path.isfile(ckpt_for_ucat):
+            run_evaluation_script("analyze_ucat.py", [
+                "--checkpoint", ckpt_for_ucat,
+                "--data_root", data_root,
+                "--save_dir", f"{results_base}/ucat",
+                "--batch_size", str(batch_size),
+            ] + ds_flag)
 
-    # 7. Robustness
-    if os.path.isfile(ckpt_for_ucat):
-        run_evaluation_script("analyze_robustness.py", [
-            "--checkpoint", ckpt_for_ucat,
-            "--data_root", data_root,
-            "--save_dir", "./analysis_results/robustness",
-            "--batch_size", str(batch_size),
-        ])
+        # 5. OOD detection
+        if os.path.isfile(ckpt_for_ucat):
+            run_evaluation_script("analyze_ood.py", [
+                "--checkpoint", ckpt_for_ucat,
+                "--data_root", data_root,
+                "--save_dir", f"{results_base}/ood",
+                "--batch_size", str(batch_size),
+            ] + ds_flag)
 
-    # 8. Latency
+        # 6. Calibration
+        if os.path.isfile(ckpt_for_ucat) and os.path.isfile(ckpt_base):
+            run_evaluation_script("analyze_calibration.py", [
+                "--checkpoint_ucat", ckpt_for_ucat,
+                "--checkpoint_baseline", ckpt_base,
+                "--data_root", data_root,
+                "--save_dir", f"{results_base}/calibration",
+                "--batch_size", str(batch_size),
+            ] + ds_flag)
+
+        # 7. Robustness (EuroSAT only — other datasets use different corruption pipeline)
+        if dataset == "eurosat" and os.path.isfile(ckpt_for_ucat):
+            run_evaluation_script("analyze_robustness.py", [
+                "--checkpoint", ckpt_for_ucat,
+                "--data_root", data_root,
+                "--save_dir", f"{results_base}/robustness",
+                "--batch_size", str(batch_size),
+            ] + ds_flag)
+
+    # ---- Cross-dataset / global evaluations ----
+    print(f"\n  --- Global evaluations ---")
+
+    # 8. Latency benchmark
     run_evaluation_script("benchmark_latency.py", [
         "--save_dir", "./analysis_results/latency",
         "--num_runs", "200",
@@ -485,11 +608,33 @@ def run_all_evaluations(data_root, batch_size):
             "--save_dir", "./analysis_results/dynamics",
         ])
 
-    # 10. Ablation accuracy summary
+    # 10. Ablation accuracy summary (EuroSAT)
     print("\n  Collecting ablation accuracy results...")
     run_ablation_accuracy_summary(data_root, batch_size)
 
-    # 11. Generate all figures
+    # 11. Uncertainty method comparison
+    print("\n  Running uncertainty method comparison...")
+    run_uncertainty_comparison(data_root, batch_size)
+
+    # 12. Statistical significance tests
+    print("\n  Running statistical significance tests...")
+    run_evaluation_script("statistical_significance.py", [
+        "--results_dir", "./results",
+        "--save_dir", "./analysis_results/significance",
+    ])
+
+    # 13. Theoretical analysis
+    print("\n  Running theoretical analysis...")
+    ckpt_main = "./checkpoints/decomp_with_losses/best_model_val_acc.pt"
+    if os.path.isfile(ckpt_main):
+        run_evaluation_script("theoretical_analysis.py", [
+            "--checkpoint", ckpt_main,
+            "--data_root", data_root,
+            "--save_dir", "./analysis_results/theoretical",
+            "--batch_size", str(batch_size),
+        ])
+
+    # 14. Generate all figures
     print("\n  Generating publication figures...")
     run_evaluation_script("generate_figures.py", [
         "--results_dir", "./analysis_results",
@@ -499,59 +644,69 @@ def run_all_evaluations(data_root, batch_size):
 
 
 def run_ablation_accuracy_summary(data_root, batch_size):
-    """Evaluate all checkpoints and produce accuracy summary."""
-    script = """
-import sys, os, json, torch
-sys.path.insert(0, '.')
-from src.models.efficient_vit import EfficientEuroSATViT
-from src.models.baseline import BaselineViT
-from src.data.eurosat import get_eurosat_dataloaders
-from src.utils.helpers import set_seed
-set_seed(42)
-device = 'cuda' if torch.cuda.is_available() else ('mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else 'cpu')
-_, _, test_loader, _ = get_eurosat_dataloaders(root='%s', batch_size=%d, num_workers=4)
-experiments = [d for d in os.listdir('./checkpoints') if os.path.isdir(f'./checkpoints/{d}')]
-results = {}
-for exp_name in sorted(experiments):
-    ckpt_path = f'./checkpoints/{exp_name}/best_model_val_acc.pt'
-    if not os.path.exists(ckpt_path):
-        continue
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-    config = ckpt.get('model_config', {})
-    if config.get('model_type') == 'baseline':
-        model = BaselineViT(num_classes=10)
-    else:
-        model = EfficientEuroSATViT(
-            num_classes=10,
-            use_learned_temp=config.get('use_learned_temp', True),
-            use_early_exit=config.get('use_early_exit', True),
-            use_learned_dropout=config.get('use_learned_dropout', True),
-            use_learned_residual=config.get('use_learned_residual', True),
-            use_temp_annealing=config.get('use_temp_annealing', True),
-            use_decomposition=config.get('use_decomposition', False),
-        )
-    model.load_state_dict(ckpt['model_state_dict'])
-    model = model.to(device)
-    model.eval()
-    if hasattr(model, 'early_exit_enabled'):
-        model.early_exit_enabled = False
-    correct = total = 0
-    with torch.no_grad():
-        for images, labels in test_loader:
-            images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
-            _, predicted = outputs.max(1)
-            correct += predicted.eq(labels).sum().item()
-            total += labels.size(0)
-    acc = correct / total
-    results[exp_name] = {'test_acc': acc}
-    print(f'  {exp_name:30s}: {acc*100:.2f}%%')
-os.makedirs('./analysis_results/accuracy', exist_ok=True)
-with open('./analysis_results/accuracy/evaluation_results.json', 'w') as f:
-    json.dump(results, f, indent=2)
-""" % (data_root, batch_size)
+    """Evaluate all EuroSAT checkpoints and produce accuracy summary."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    eval_script = os.path.join(script_dir, "evaluate.py")
 
-    subprocess.run([sys.executable, "-u", "-c", script], check=False)
+    # Collect results from all training JSONs
+    results = {}
+    for json_file in sorted(glob.glob("./results/*.json")):
+        try:
+            with open(json_file) as f:
+                data = json.load(f)
+            exp_name = data.get("experiment_name", os.path.basename(json_file))
+            test_acc = data.get("test", {}).get("test_acc")
+            dataset = data.get("dataset", "eurosat")
+            arch = data.get("arch", "tiny")
+            if test_acc is not None:
+                results[exp_name] = {
+                    "test_acc": test_acc,
+                    "dataset": dataset,
+                    "arch": arch,
+                }
+                print(f"  {exp_name:35s}: {test_acc*100:.2f}% ({dataset}/{arch})")
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    os.makedirs("./analysis_results/accuracy", exist_ok=True)
+    with open("./analysis_results/accuracy/evaluation_results.json", "w") as f:
+        json.dump(results, f, indent=2)
+
+
+def run_uncertainty_comparison(data_root, batch_size):
+    """Run uncertainty method comparison for each dataset that has checkpoints."""
+    for dataset in DATASETS:
+        if dataset == "eurosat":
+            ckpt_main = "./checkpoints/decomp_with_losses/best_model_val_acc.pt"
+            ckpt_baselines = [
+                "./checkpoints/baseline/best_model_val_acc.pt",
+                "./checkpoints/baseline_s123/best_model_val_acc.pt",
+                "./checkpoints/baseline_s456/best_model_val_acc.pt",
+            ]
+        else:
+            ckpt_main = f"./checkpoints/{dataset}_decomp/best_model_val_acc.pt"
+            ckpt_baselines = [
+                f"./checkpoints/{dataset}_baseline/best_model_val_acc.pt",
+            ]
+
+        if not os.path.isfile(ckpt_main):
+            print(f"  SKIP uncertainty comparison for {dataset}: no main checkpoint")
+            continue
+
+        # Only run if we have at least the main checkpoint
+        existing_baselines = [c for c in ckpt_baselines if os.path.isfile(c)]
+
+        args = [
+            "--ucat_checkpoint", ckpt_main,
+            "--data_root", data_root,
+            "--dataset", dataset,
+            "--save_dir", f"./analysis_results/uncertainty_{dataset}",
+            "--batch_size", str(batch_size),
+        ]
+        if existing_baselines:
+            args.extend(["--baseline_checkpoints"] + existing_baselines)
+
+        run_evaluation_script("compare_uncertainty_methods.py", args)
 
 
 # ======================================================================
@@ -564,47 +719,54 @@ def main():
 
     print()
     print("#" * 72)
-    print("#  EfficientEuroSAT — Autonomous Self-Tuning Pipeline")
+    print("#  EfficientEuroSAT — Autonomous Self-Tuning TNNLS Pipeline")
     print("#" * 72)
     print(f"  Epochs:     {args.epochs}")
     print(f"  Batch size: {args.batch_size}")
     print(f"  Data root:  {args.data_root}")
     print(f"  Resume:     {args.resume}")
     print(f"  Max retries per experiment: {MAX_RETRIES}")
+    print(f"  Datasets:   {', '.join(DATASETS)}")
     print()
 
     experiments = get_experiments()
     summary = []
     baseline_acc = None
 
+    total = len(experiments)
+    print(f"  Total experiments: {total}")
+    print()
+
     # ---- Training phase ----
-    for exp in experiments:
+    for idx, exp in enumerate(experiments):
         name = exp["name"]
         flags = list(exp["flags"])
         can_retry = exp["retry"]
+        phase = exp["phase"]
 
         save_dir = f"./checkpoints/{name}"
+
+        print(f"\n  [{idx+1}/{total}] {name} (phase: {phase})")
 
         # Resume check
         if args.resume and checkpoint_exists(save_dir):
             print(f"  SKIP: {name} (checkpoint exists)")
             results = read_results(name)
             acc = get_test_accuracy(results)
-            if exp["phase"] == "baseline" and acc is not None:
+            if phase == "baseline" and name == "baseline" and acc is not None:
                 baseline_acc = acc
-            summary.append({"name": name, "status": "SKIPPED", "acc": acc})
+            summary.append({"name": name, "status": "SKIPPED", "acc": acc, "phase": phase})
             continue
 
         # Train with retries
         success = False
         current_flags = flags
+        acc = None
         for attempt in range(MAX_RETRIES if can_retry else 1):
             if attempt > 0:
-                # Clean previous checkpoint for retry
                 import shutil
                 if os.path.isdir(save_dir):
                     shutil.rmtree(save_dir)
-                # Remove old results
                 for f in glob.glob(f"./results/{name}*.json"):
                     os.remove(f)
 
@@ -620,11 +782,10 @@ def main():
                     current_flags = adjust_hyperparams(current_flags, issues, attempt)
                 continue
 
-            # Read results and check benchmarks
             results = read_results(name)
             acc = get_test_accuracy(results)
 
-            if exp["phase"] == "baseline":
+            if phase == "baseline" and name == "baseline":
                 baseline_acc = acc
                 success = True
                 break
@@ -643,7 +804,7 @@ def main():
                 break
 
         status = "COMPLETED" if success else "FAILED"
-        summary.append({"name": name, "status": status, "acc": acc})
+        summary.append({"name": name, "status": status, "acc": acc, "phase": phase})
 
     # ---- Evaluation phase ----
     run_all_evaluations(args.data_root, args.batch_size)
@@ -654,13 +815,25 @@ def main():
     print("=" * 72)
     print("  FINAL SUMMARY")
     print("=" * 72)
-    print(f"  {'Experiment':<32s} {'Status':<12s} {'Test Acc':<10s}")
-    print("  " + "-" * 60)
+    print(f"  {'Experiment':<35s} {'Phase':<16s} {'Status':<12s} {'Test Acc':<10s}")
+    print("  " + "-" * 68)
     for row in summary:
         acc_str = f"{row['acc']*100:.2f}%" if row['acc'] is not None else "N/A"
-        print(f"  {row['name']:<32s} {row['status']:<12s} {acc_str:<10s}")
+        print(f"  {row['name']:<35s} {row['phase']:<16s} {row['status']:<12s} {acc_str:<10s}")
     print("=" * 72)
     print(f"  Total time: {format_duration(total_time)}")
+
+    # Per-phase summary
+    phases = {}
+    for row in summary:
+        p = row["phase"]
+        if p not in phases:
+            phases[p] = {"completed": 0, "failed": 0, "skipped": 0}
+        phases[p][row["status"].lower()] = phases[p].get(row["status"].lower(), 0) + 1
+    print("\n  Per-phase breakdown:")
+    for p, counts in phases.items():
+        parts = [f"{v} {k}" for k, v in counts.items() if v > 0]
+        print(f"    {p:<20s}: {', '.join(parts)}")
 
     # Save summary
     os.makedirs("./analysis_results", exist_ok=True)
@@ -669,6 +842,8 @@ def main():
             "summary": summary,
             "total_time_seconds": total_time,
             "benchmarks": BENCHMARKS,
+            "datasets": DATASETS,
+            "num_experiments": total,
         }, f, indent=2)
 
     print()
@@ -676,6 +851,9 @@ def main():
     print("    Checkpoints:   ./checkpoints/<name>/best_model_val_acc.pt")
     print("    Results:       ./results/<name>.json")
     print("    Analysis:      ./analysis_results/")
+    print("    Significance:  ./analysis_results/significance/")
+    print("    Theoretical:   ./analysis_results/theoretical/")
+    print("    Uncertainty:   ./analysis_results/uncertainty_<dataset>/")
     print("    Figures:       ./figures/")
     print()
 

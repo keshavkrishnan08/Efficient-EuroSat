@@ -269,3 +269,34 @@ def create_baseline_vit(
         mlp_ratio=4.0,
         drop_rate=0.1,
     )
+
+
+def create_baseline_vit_small(
+    num_classes: int = 10,
+    img_size: int = 224,
+    patch_size: int = 16,
+) -> BaselineViT:
+    """
+    Factory function to create a baseline ViT-Small model.
+
+    ViT-Small: embed_dim=384, num_layers=12, num_heads=6, ~22M params.
+
+    Args:
+        num_classes: Number of output classes.
+        img_size: Input image size (default: 224).
+        patch_size: Patch size for patch embedding (default: 16).
+
+    Returns:
+        A BaselineViT model instance with ViT-Small dimensions.
+    """
+    return BaselineViT(
+        img_size=img_size,
+        patch_size=patch_size,
+        in_channels=3,
+        num_classes=num_classes,
+        embed_dim=384,
+        num_layers=12,
+        num_heads=6,
+        mlp_ratio=4.0,
+        drop_rate=0.1,
+    )

@@ -1,9 +1,10 @@
-"""Pretrained weight loading for ViT-Tiny from timm (ImageNet-1K).
+"""Pretrained weight loading for ViT-Tiny/Small from timm (ImageNet-1K).
 
-Downloads and maps timm's `vit_tiny_patch16_224` weights to our custom
-EfficientEuroSATViT and BaselineViT architectures. Only backbone weights
-are transferred — the classification head is re-initialized for EuroSAT
-(10 classes), and all UCAT modification parameters start from scratch.
+Downloads and maps timm's `vit_tiny_patch16_224` or `vit_small_patch16_224`
+weights to our custom EfficientEuroSATViT and BaselineViT architectures.
+Only backbone weights are transferred — the classification head is
+re-initialized for the target dataset, and all UCAT modification
+parameters start from scratch.
 """
 
 from __future__ import annotations
@@ -17,10 +18,10 @@ import torch.nn as nn
 logger = logging.getLogger(__name__)
 
 
-def _get_timm_state_dict() -> Dict[str, torch.Tensor]:
-    """Download ViT-Tiny pretrained weights via timm."""
+def _get_timm_state_dict(model_name: str = "vit_tiny_patch16_224") -> Dict[str, torch.Tensor]:
+    """Download pretrained weights via timm."""
     import timm
-    model = timm.create_model("vit_tiny_patch16_224", pretrained=True)
+    model = timm.create_model(model_name, pretrained=True)
     return model.state_dict()
 
 
@@ -158,4 +159,102 @@ def load_pretrained_baseline(model: nn.Module) -> None:
     print(
         f"  Pretrained: loaded {loaded}/{total_model} backbone params from "
         f"ImageNet ViT-Tiny"
+    )
+
+
+# ======================================================================
+# ViT-Small pretrained loading
+# ======================================================================
+
+def load_pretrained_efficient_small(model: nn.Module) -> None:
+    """Load ImageNet-pretrained ViT-Small weights into EfficientEuroSATViT.
+
+    Same mapping logic as ``load_pretrained_efficient`` but uses
+    ``vit_small_patch16_224`` (384 dim, 6 heads).
+    """
+    timm_sd = _get_timm_state_dict("vit_small_patch16_224")
+    model_sd = model.state_dict()
+
+    loaded, skipped = 0, 0
+    new_sd = {}
+
+    for key, param in timm_sd.items():
+        if key.startswith("head."):
+            skipped += 1
+            continue
+        if key not in model_sd:
+            skipped += 1
+            continue
+        if param.shape != model_sd[key].shape:
+            logger.warning(
+                "Shape mismatch for %s: timm %s vs model %s — skipping",
+                key, param.shape, model_sd[key].shape,
+            )
+            skipped += 1
+            continue
+        new_sd[key] = param
+        loaded += 1
+
+    model.load_state_dict(new_sd, strict=False)
+    total_model = len(model_sd)
+    print(
+        f"  Pretrained: loaded {loaded}/{total_model} backbone params from "
+        f"ImageNet ViT-Small ({total_model - loaded} modification params init from scratch)"
+    )
+
+
+def load_pretrained_baseline_small(model: nn.Module) -> None:
+    """Load ImageNet-pretrained ViT-Small weights into BaselineViT.
+
+    Same key remapping as ``load_pretrained_baseline`` but uses
+    ``vit_small_patch16_224``.
+    """
+    timm_sd = _get_timm_state_dict("vit_small_patch16_224")
+    model_sd = model.state_dict()
+
+    key_map: Dict[str, str] = {}
+    key_map["patch_embed.proj.weight"] = "patch_embed.weight"
+    key_map["patch_embed.proj.bias"] = "patch_embed.bias"
+    key_map["cls_token"] = "cls_token"
+    key_map["pos_embed"] = "pos_embed"
+    key_map["norm.weight"] = "norm.weight"
+    key_map["norm.bias"] = "norm.bias"
+
+    num_layers = getattr(model, "num_layers", 12)
+    for i in range(num_layers):
+        key_map[f"blocks.{i}.norm1.weight"] = f"blocks.{i}.norm1.weight"
+        key_map[f"blocks.{i}.norm1.bias"] = f"blocks.{i}.norm1.bias"
+        key_map[f"blocks.{i}.norm2.weight"] = f"blocks.{i}.norm2.weight"
+        key_map[f"blocks.{i}.norm2.bias"] = f"blocks.{i}.norm2.bias"
+        key_map[f"blocks.{i}.attn.qkv.weight"] = f"blocks.{i}.attn.qkv.weight"
+        key_map[f"blocks.{i}.attn.qkv.bias"] = f"blocks.{i}.attn.qkv.bias"
+        key_map[f"blocks.{i}.attn.proj.weight"] = f"blocks.{i}.attn.proj.weight"
+        key_map[f"blocks.{i}.attn.proj.bias"] = f"blocks.{i}.attn.proj.bias"
+        key_map[f"blocks.{i}.mlp.fc1.weight"] = f"blocks.{i}.mlp.0.weight"
+        key_map[f"blocks.{i}.mlp.fc1.bias"] = f"blocks.{i}.mlp.0.bias"
+        key_map[f"blocks.{i}.mlp.fc2.weight"] = f"blocks.{i}.mlp.3.weight"
+        key_map[f"blocks.{i}.mlp.fc2.bias"] = f"blocks.{i}.mlp.3.bias"
+
+    loaded, skipped = 0, 0
+    new_sd = {}
+
+    for timm_key, param in timm_sd.items():
+        if timm_key.startswith("head."):
+            skipped += 1
+            continue
+        target_key = key_map.get(timm_key)
+        if target_key is None or target_key not in model_sd:
+            skipped += 1
+            continue
+        if param.shape != model_sd[target_key].shape:
+            skipped += 1
+            continue
+        new_sd[target_key] = param
+        loaded += 1
+
+    model.load_state_dict(new_sd, strict=False)
+    total_model = len(model_sd)
+    print(
+        f"  Pretrained: loaded {loaded}/{total_model} backbone params from "
+        f"ImageNet ViT-Small"
     )

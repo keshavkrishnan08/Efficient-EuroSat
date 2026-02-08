@@ -1,25 +1,16 @@
 #!/usr/bin/env python3
 """
-Master training orchestrator for EfficientEuroSAT ablation experiments.
+Master training orchestrator for EfficientEuroSAT TNNLS experiments.
 
-Defines all 10 experiment configurations from the ablation study plan and
-runs them sequentially by invoking train.py via subprocess. Each experiment
-gets its own checkpoint directory and can be selectively run or resumed.
+Defines all 35 experiment configurations for multi-dataset, multi-architecture,
+and multi-seed ablation study. Runs sequentially by invoking train.py via subprocess.
 
-Experiments:
-    1. baseline                -- Baseline ViT (no modifications)
-    2. ucat_only               -- +UCAT loss only
-    3. early_exit_only         -- +Early Exit only
-    4. dropout_only            -- +Learned Dropout only
-    5. residual_only           -- +Learned Residual only
-    6. annealing_only          -- +Temperature Annealing only
-    7. all_combined_s42        -- All modifications combined, seed 42
-    8. all_no_ucat             -- All modifications minus UCAT, seed 42
-    9. all_combined_s123       -- All modifications combined, seed 123
-   10. all_combined_s456       -- All modifications combined, seed 456
-   11. decomp_input_dep_only   -- Input-dep tau_a, fixed tau_e
-   12. decomp_with_losses      -- Decomp + all losses
-   13. decomp_with_losses_s123 -- Decomp + losses, seed 123
+Experiments 1-13:  EuroSAT ViT-Tiny (original ablations + decomposition)
+Experiments 14-24: EuroSAT ViT-Tiny (3-seed coverage for ablations + decomp)
+Experiments 25-26: EuroSAT ViT-Tiny (extra baseline seeds for ensemble)
+Experiments 27-29: CIFAR-100 ViT-Tiny (cross-dataset validation)
+Experiments 30-32: RESISC45 ViT-Tiny (cross-dataset validation)
+Experiments 33-35: EuroSAT ViT-Small (multi-architecture validation)
 
 Usage:
     # Run all experiments
@@ -208,6 +199,69 @@ EXPERIMENTS = [
             "--seed", "123",
         ],
     },
+    # --- 3-Seed Coverage (Gaps 4 + 6) ---
+    {"number": 14, "name": "ucat_only_s123", "description": "+UCAT, seed 123",
+     "flags": ["--model", "efficient_eurosat", "--no_early_exit", "--no_learned_dropout",
+               "--no_learned_residual", "--no_temp_annealing", "--lambda_ucat", "0.1", "--seed", "123"]},
+    {"number": 15, "name": "ucat_only_s456", "description": "+UCAT, seed 456",
+     "flags": ["--model", "efficient_eurosat", "--no_early_exit", "--no_learned_dropout",
+               "--no_learned_residual", "--no_temp_annealing", "--lambda_ucat", "0.1", "--seed", "456"]},
+    {"number": 16, "name": "early_exit_only_s123", "description": "+Exit, seed 123",
+     "flags": ["--model", "efficient_eurosat", "--no_learned_temp", "--no_learned_dropout",
+               "--no_learned_residual", "--no_temp_annealing", "--lambda_ucat", "0.0", "--seed", "123"]},
+    {"number": 17, "name": "early_exit_only_s456", "description": "+Exit, seed 456",
+     "flags": ["--model", "efficient_eurosat", "--no_learned_temp", "--no_learned_dropout",
+               "--no_learned_residual", "--no_temp_annealing", "--lambda_ucat", "0.0", "--seed", "456"]},
+    {"number": 18, "name": "dropout_only_s123", "description": "+Dropout, seed 123",
+     "flags": ["--model", "efficient_eurosat", "--no_learned_temp", "--no_early_exit",
+               "--no_learned_residual", "--no_temp_annealing", "--lambda_ucat", "0.0", "--seed", "123"]},
+    {"number": 19, "name": "dropout_only_s456", "description": "+Dropout, seed 456",
+     "flags": ["--model", "efficient_eurosat", "--no_learned_temp", "--no_early_exit",
+               "--no_learned_residual", "--no_temp_annealing", "--lambda_ucat", "0.0", "--seed", "456"]},
+    {"number": 20, "name": "residual_only_s123", "description": "+Residual, seed 123",
+     "flags": ["--model", "efficient_eurosat", "--no_learned_temp", "--no_early_exit",
+               "--no_learned_dropout", "--no_temp_annealing", "--lambda_ucat", "0.0", "--seed", "123"]},
+    {"number": 21, "name": "residual_only_s456", "description": "+Residual, seed 456",
+     "flags": ["--model", "efficient_eurosat", "--no_learned_temp", "--no_early_exit",
+               "--no_learned_dropout", "--no_temp_annealing", "--lambda_ucat", "0.0", "--seed", "456"]},
+    {"number": 22, "name": "annealing_only_s123", "description": "+Anneal, seed 123",
+     "flags": ["--model", "efficient_eurosat", "--no_early_exit", "--no_learned_dropout",
+               "--no_learned_residual", "--lambda_ucat", "0.0", "--seed", "123"]},
+    {"number": 23, "name": "annealing_only_s456", "description": "+Anneal, seed 456",
+     "flags": ["--model", "efficient_eurosat", "--no_early_exit", "--no_learned_dropout",
+               "--no_learned_residual", "--lambda_ucat", "0.0", "--seed", "456"]},
+    {"number": 24, "name": "decomp_with_losses_s456", "description": "Decomp + losses, seed 456",
+     "flags": ["--model", "efficient_eurosat", "--use_decomposition", "--lambda_ucat", "0.1",
+               "--lambda_aleatoric", "0.05", "--lambda_epistemic", "0.05", "--seed", "456"]},
+    # --- Extra baseline seeds (for Deep Ensemble) ---
+    {"number": 25, "name": "baseline_s123", "description": "Baseline, seed 123",
+     "flags": ["--model", "baseline", "--seed", "123"]},
+    {"number": 26, "name": "baseline_s456", "description": "Baseline, seed 456",
+     "flags": ["--model", "baseline", "--seed", "456"]},
+    # --- Multi-Dataset: CIFAR-100 ---
+    {"number": 27, "name": "cifar100_baseline", "description": "CIFAR-100 Baseline",
+     "flags": ["--model", "baseline", "--dataset", "cifar100", "--seed", "42"]},
+    {"number": 28, "name": "cifar100_all_combined", "description": "CIFAR-100 All combined",
+     "flags": ["--model", "efficient_eurosat", "--dataset", "cifar100", "--lambda_ucat", "0.1", "--seed", "42"]},
+    {"number": 29, "name": "cifar100_decomp", "description": "CIFAR-100 Decomp",
+     "flags": ["--model", "efficient_eurosat", "--dataset", "cifar100", "--use_decomposition",
+               "--lambda_ucat", "0.1", "--lambda_aleatoric", "0.05", "--lambda_epistemic", "0.05", "--seed", "42"]},
+    # --- Multi-Dataset: RESISC45 ---
+    {"number": 30, "name": "resisc45_baseline", "description": "RESISC45 Baseline",
+     "flags": ["--model", "baseline", "--dataset", "resisc45", "--seed", "42"]},
+    {"number": 31, "name": "resisc45_all_combined", "description": "RESISC45 All combined",
+     "flags": ["--model", "efficient_eurosat", "--dataset", "resisc45", "--lambda_ucat", "0.1", "--seed", "42"]},
+    {"number": 32, "name": "resisc45_decomp", "description": "RESISC45 Decomp",
+     "flags": ["--model", "efficient_eurosat", "--dataset", "resisc45", "--use_decomposition",
+               "--lambda_ucat", "0.1", "--lambda_aleatoric", "0.05", "--lambda_epistemic", "0.05", "--seed", "42"]},
+    # --- Multi-Architecture: ViT-Small on EuroSAT ---
+    {"number": 33, "name": "eurosat_baseline_small", "description": "EuroSAT Baseline Small",
+     "flags": ["--model", "baseline", "--arch", "small", "--seed", "42"]},
+    {"number": 34, "name": "eurosat_all_combined_small", "description": "EuroSAT All combined Small",
+     "flags": ["--model", "efficient_eurosat", "--arch", "small", "--lambda_ucat", "0.1", "--seed", "42"]},
+    {"number": 35, "name": "eurosat_decomp_small", "description": "EuroSAT Decomp Small",
+     "flags": ["--model", "efficient_eurosat", "--arch", "small", "--use_decomposition",
+               "--lambda_ucat", "0.1", "--lambda_aleatoric", "0.05", "--lambda_epistemic", "0.05", "--seed", "42"]},
 ]
 
 

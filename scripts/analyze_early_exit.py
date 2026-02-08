@@ -25,7 +25,7 @@ import torch
 import torch.nn.functional as F
 from collections import defaultdict
 
-from src.data.eurosat import get_eurosat_dataloaders, EUROSAT_CLASS_NAMES
+from src.data.datasets import get_dataloaders, get_dataset_info, get_class_names
 from src.models.efficient_vit import EfficientEuroSATViT, create_efficient_eurosat_tiny
 from src.utils.helpers import set_seed, get_device
 
@@ -46,6 +46,9 @@ def parse_args():
     )
     parser.add_argument('--checkpoint', type=str, required=True,
                         help='Path to trained model checkpoint')
+    parser.add_argument('--dataset', type=str, default='eurosat',
+                        choices=['eurosat', 'cifar100', 'resisc45'],
+                        help='Dataset to evaluate on')
     parser.add_argument('--data_root', type=str, default='./data',
                         help='Root directory for dataset')
     parser.add_argument('--save_dir', type=str, default='./exit_analysis',
@@ -61,10 +64,11 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_model(checkpoint_path, device):
+def load_model(checkpoint_path, device, dataset_name='eurosat'):
     """Load the EfficientEuroSAT model from checkpoint."""
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model_config = checkpoint.get('model_config', {})
+    default_num_classes = get_dataset_info(dataset_name)['num_classes']
 
     if model_config.get('model_type', 'efficient_eurosat') != 'efficient_eurosat':
         raise ValueError(
@@ -74,7 +78,7 @@ def load_model(checkpoint_path, device):
 
     model = EfficientEuroSATViT(
         img_size=model_config.get('img_size', 224),
-        num_classes=model_config.get('num_classes', 10),
+        num_classes=model_config.get('num_classes', default_num_classes),
         use_learned_temp=model_config.get('use_learned_temp', True),
         use_early_exit=model_config.get('use_early_exit', True),
         use_learned_dropout=model_config.get('use_learned_dropout', True),
@@ -514,13 +518,15 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
 
     # Load model
-    model, model_config = load_model(args.checkpoint, device)
+    model, model_config = load_model(args.checkpoint, device, dataset_name=args.dataset)
+    class_names = get_class_names(args.dataset)
     print(f"Exit threshold: {model_config.get('exit_threshold', 0.9)}")
     print(f"Min exit layer:  {model_config.get('exit_min_layer', 4)}")
 
     # Load test data
     print("\nLoading test data...")
-    _, _, test_loader, _ = get_eurosat_dataloaders(
+    _, _, test_loader, _ = get_dataloaders(
+        dataset_name=args.dataset,
         root=args.data_root,
         img_size=model_config.get('img_size', 224),
         batch_size=args.batch_size,
@@ -552,25 +558,26 @@ def main():
 
     # 2. Per-class analysis
     print("\n--- Per-Class Exit Analysis ---")
-    class_stats = analyze_per_class_exit(records)
+    num_classes = get_dataset_info(args.dataset)['num_classes']
+    class_stats = analyze_per_class_exit(records, num_classes=num_classes)
 
     # Find classes with extreme exit behavior
     sorted_by_exit = sorted(class_stats.items(), key=lambda x: x[1]['mean_exit_layer'])
     print("  Earliest exiting classes:")
     for cls, stats in sorted_by_exit[:5]:
-        name = EUROSAT_CLASS_NAMES[cls] if cls < len(EUROSAT_CLASS_NAMES) else f'Class {cls}'
+        name = class_names[cls] if cls < len(class_names) else f'Class {cls}'
         print(f"    {cls:2d} ({name}): layer {stats['mean_exit_layer']:.2f}, "
               f"acc {stats['accuracy'] * 100:.1f}%")
     print("  Latest exiting classes:")
     for cls, stats in sorted_by_exit[-5:]:
-        name = EUROSAT_CLASS_NAMES[cls] if cls < len(EUROSAT_CLASS_NAMES) else f'Class {cls}'
+        name = class_names[cls] if cls < len(class_names) else f'Class {cls}'
         print(f"    {cls:2d} ({name}): layer {stats['mean_exit_layer']:.2f}, "
               f"acc {stats['accuracy'] * 100:.1f}%")
 
     plot_per_class_exit_layers(
         class_stats,
         os.path.join(args.save_dir, 'per_class_exit_layers.png'),
-        class_names=EUROSAT_CLASS_NAMES
+        class_names=class_names
     )
 
     # 3. Accuracy vs exit layer
