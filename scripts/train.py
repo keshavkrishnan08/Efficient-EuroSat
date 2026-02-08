@@ -3,11 +3,11 @@
 Main training script for EfficientEuroSAT.
 
 Trains either the EfficientEuroSAT model (with learned modifications) or
-a baseline ViT model on the EuroSAT satellite land use classification dataset.
+a baseline ViT model on EuroSAT, CIFAR-100, or RESISC45 datasets.
 
 Usage:
-    python train.py --model efficient_eurosat --epochs 100 --batch_size 64
-    python train.py --model baseline --epochs 100
+    python train.py --model efficient_eurosat --dataset eurosat --epochs 200
+    python train.py --model baseline --dataset cifar100 --arch small
     python train.py --model efficient_eurosat --no_learned_temp --no_early_exit
 """
 
@@ -22,18 +22,26 @@ import datetime
 import numpy as np
 import torch
 
-from src.data.eurosat import get_eurosat_dataloaders
-from src.models.efficient_vit import EfficientEuroSATViT, create_efficient_eurosat_tiny, create_baseline_vit_tiny
-from src.models.baseline import BaselineViT
+from src.data.datasets import get_dataloaders, get_dataset_info
+from src.models.efficient_vit import EfficientEuroSATViT, create_efficient_eurosat_tiny, create_efficient_eurosat_small
+from src.models.baseline import BaselineViT, create_baseline_vit, create_baseline_vit_small
 from src.training.trainer import EuroSATTrainer
 from src.utils.helpers import set_seed, get_device, count_parameters
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='Train EfficientEuroSAT or baseline model on EuroSAT',
+        description='Train EfficientEuroSAT or baseline model',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
+
+    # Dataset and architecture selection
+    parser.add_argument('--dataset', type=str, default='eurosat',
+                        choices=['eurosat', 'cifar100', 'resisc45'],
+                        help='Dataset to train on')
+    parser.add_argument('--arch', type=str, default='tiny',
+                        choices=['tiny', 'small'],
+                        help='ViT architecture size (tiny=192d/3h, small=384d/6h)')
 
     # Model selection
     parser.add_argument('--model', type=str, default='efficient_eurosat',
@@ -48,7 +56,7 @@ def parse_args():
     parser.add_argument('--lr', type=float, default=5e-4,
                         help='Learning rate')
     parser.add_argument('--pretrained', action='store_true', default=True,
-                        help='Load ImageNet-pretrained ViT-Tiny weights (default: True)')
+                        help='Load ImageNet-pretrained weights (default: True)')
     parser.add_argument('--no_pretrained', action='store_true',
                         help='Disable pretrained weight loading (train from scratch)')
     parser.add_argument('--mixup_alpha', type=float, default=0.8,
@@ -113,7 +121,10 @@ def parse_args():
 
 def generate_experiment_name(args):
     """Generate a descriptive experiment name from the configuration."""
-    parts = [args.model]
+    parts = [args.dataset, args.model]
+
+    if args.arch != 'tiny':
+        parts.append(args.arch)
 
     if args.model == 'efficient_eurosat':
         mods = []
@@ -146,15 +157,24 @@ def generate_experiment_name(args):
     return '-'.join(parts)
 
 
-def build_model(args, device):
+def build_model(args, device, num_classes):
     """Build the model based on command-line arguments."""
-    num_classes = 10  # EuroSAT has 10 classes
     use_pretrained = args.pretrained and not args.no_pretrained
+    arch = getattr(args, 'arch', 'tiny')
+
+    # Architecture dimensions
+    if arch == 'small':
+        embed_dim, depth, num_heads = 384, 12, 6
+    else:
+        embed_dim, depth, num_heads = 192, 12, 3
 
     if args.model == 'efficient_eurosat':
         model = EfficientEuroSATViT(
             img_size=args.img_size,
             num_classes=num_classes,
+            embed_dim=embed_dim,
+            depth=depth,
+            num_heads=num_heads,
             use_learned_temp=not args.no_learned_temp,
             use_early_exit=not args.no_early_exit,
             use_learned_dropout=not args.no_learned_dropout,
@@ -167,16 +187,26 @@ def build_model(args, device):
             use_decomposition=args.use_decomposition,
         )
         if use_pretrained:
-            from src.models.pretrained import load_pretrained_efficient
-            load_pretrained_efficient(model)
+            from src.models.pretrained import (
+                load_pretrained_efficient, load_pretrained_efficient_small,
+            )
+            if arch == 'small':
+                load_pretrained_efficient_small(model)
+            else:
+                load_pretrained_efficient(model)
     elif args.model == 'baseline':
-        model = BaselineViT(
-            img_size=args.img_size,
-            num_classes=num_classes,
-        )
+        if arch == 'small':
+            model = create_baseline_vit_small(num_classes=num_classes, img_size=args.img_size)
+        else:
+            model = create_baseline_vit(num_classes=num_classes, img_size=args.img_size)
         if use_pretrained:
-            from src.models.pretrained import load_pretrained_baseline
-            load_pretrained_baseline(model)
+            from src.models.pretrained import (
+                load_pretrained_baseline, load_pretrained_baseline_small,
+            )
+            if arch == 'small':
+                load_pretrained_baseline_small(model)
+            else:
+                load_pretrained_baseline(model)
     else:
         raise ValueError(f"Unknown model type: {args.model}")
 
@@ -187,6 +217,10 @@ def build_model(args, device):
 def main():
     args = parse_args()
 
+    # Get dataset info
+    dataset_info = get_dataset_info(args.dataset)
+    num_classes = dataset_info["num_classes"]
+
     # Generate experiment name if not provided
     if args.experiment_name is None:
         args.experiment_name = generate_experiment_name(args)
@@ -195,7 +229,8 @@ def main():
     print("EfficientEuroSAT Training Script")
     print("=" * 70)
     print(f"Experiment: {args.experiment_name}")
-    print(f"Model:      {args.model}")
+    print(f"Dataset:    {args.dataset} ({num_classes} classes)")
+    print(f"Model:      {args.model} ({getattr(args, 'arch', 'tiny')})")
     print(f"Epochs:     {args.epochs}")
     print(f"Batch Size: {args.batch_size}")
     print(f"LR:         {args.lr}")
@@ -207,9 +242,10 @@ def main():
     device = get_device()
     print(f"Device: {device}")
 
-    # Load EuroSAT data
-    print("\nLoading EuroSAT dataset...")
-    train_loader, val_loader, test_loader, class_weights = get_eurosat_dataloaders(
+    # Load data
+    print(f"\nLoading {args.dataset} dataset...")
+    train_loader, val_loader, test_loader, class_weights = get_dataloaders(
+        dataset_name=args.dataset,
         root=args.data_root,
         img_size=args.img_size,
         batch_size=args.batch_size,
@@ -220,8 +256,9 @@ def main():
     print(f"  Test batches:  {len(test_loader)}")
 
     # Create model
-    print(f"\nBuilding {args.model} model...")
-    model = build_model(args, device)
+    arch_str = getattr(args, 'arch', 'tiny')
+    print(f"\nBuilding {args.model} ({arch_str}) model...")
+    model = build_model(args, device, num_classes)
     total_params, trainable_params = count_parameters(model)
     print(f"  Total parameters:     {total_params:,}")
     print(f"  Trainable parameters: {trainable_params:,}")
@@ -244,7 +281,7 @@ def main():
     class_rarity = None
     if args.use_decomposition:
         from src.data.class_weights import compute_class_rarity
-        class_rarity = compute_class_rarity(train_loader.dataset)
+        class_rarity = compute_class_rarity(train_loader.dataset, num_classes=num_classes)
 
     # Create trainer
     use_amp = device.type == 'cuda'  # AMP only beneficial on CUDA
@@ -271,6 +308,12 @@ def main():
         cutmix_alpha=args.cutmix_alpha,
     )
 
+    # Store extra metadata in trainer for checkpoint saving
+    trainer._extra_config = {
+        'dataset': args.dataset,
+        'arch': getattr(args, 'arch', 'tiny'),
+    }
+
     # Train
     print("\n" + "=" * 70)
     print("Starting training...")
@@ -289,7 +332,10 @@ def main():
     # Compile all results
     results = {
         'experiment_name': args.experiment_name,
+        'dataset': args.dataset,
         'model': args.model,
+        'arch': getattr(args, 'arch', 'tiny'),
+        'num_classes': num_classes,
         'args': vars(args),
         'total_parameters': total_params,
         'trainable_parameters': trainable_params,
@@ -324,7 +370,8 @@ def main():
     print("\n" + "=" * 70)
     print("FINAL RESULTS")
     print("=" * 70)
-    print(f"  Model:              {args.model}")
+    print(f"  Dataset:            {args.dataset} ({num_classes} classes)")
+    print(f"  Model:              {args.model} ({arch_str})")
     print(f"  Test Accuracy:      {test_results.get('test_acc', 0) * 100:.2f}%")
     print(f"  Test Top-5 Acc:     {test_results.get('test_top5_acc', 0) * 100:.2f}%")
     print(f"  Best Val Accuracy:  {train_results.get('best_val_acc', 0) * 100:.2f}%")

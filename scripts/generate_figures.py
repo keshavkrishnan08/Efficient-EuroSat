@@ -863,6 +863,301 @@ def generate_fig9(decomp_data, output_dir, dpi):
 
 
 # ============================================================================
+# Figure 10: Cross-Dataset Accuracy Comparison
+# ============================================================================
+
+def generate_fig10(acc_data, output_dir, dpi):
+    """Generate Fig 10: grouped bar chart of baseline vs UCAT vs decomp across datasets.
+
+    Parameters
+    ----------
+    acc_data : dict
+        Parsed evaluation_results.json with experiment_name -> {test_acc, dataset, arch}.
+    output_dir : str
+        Output directory.
+    dpi : int
+        Image resolution.
+
+    Returns
+    -------
+    bool
+        True if the figure was created.
+    """
+    save_path = os.path.join(output_dir, "fig10_cross_dataset_accuracy.png")
+
+    if not isinstance(acc_data, dict):
+        return False
+
+    # Collect cross-dataset results
+    datasets = ["eurosat", "cifar100", "resisc45"]
+    methods = ["Baseline", "All Combined", "Decomposed"]
+
+    # Map experiment names to (dataset, method)
+    mapping = {
+        "eurosat": {
+            "Baseline": ["baseline"],
+            "All Combined": ["all_combined_s42"],
+            "Decomposed": ["decomp_with_losses"],
+        },
+        "cifar100": {
+            "Baseline": ["cifar100_baseline"],
+            "All Combined": ["cifar100_all_combined"],
+            "Decomposed": ["cifar100_decomp"],
+        },
+        "resisc45": {
+            "Baseline": ["resisc45_baseline"],
+            "All Combined": ["resisc45_all_combined"],
+            "Decomposed": ["resisc45_decomp"],
+        },
+    }
+
+    # Build accuracy matrix
+    acc_matrix = {}
+    found_any = False
+    for ds in datasets:
+        acc_matrix[ds] = {}
+        for method in methods:
+            exp_names = mapping[ds][method]
+            for en in exp_names:
+                if en in acc_data:
+                    entry = acc_data[en]
+                    acc_val = entry.get("test_acc") if isinstance(entry, dict) else entry
+                    if acc_val is not None:
+                        acc_matrix[ds][method] = float(acc_val)
+                        found_any = True
+                        break
+
+    if not found_any:
+        return False
+
+    # Only include datasets that have at least one result
+    valid_datasets = [ds for ds in datasets if acc_matrix[ds]]
+    if len(valid_datasets) < 2:
+        return False
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+
+    x = np.arange(len(valid_datasets))
+    width = 0.25
+    colors = ["#BDBDBD", "#42A5F5", "#1565C0"]
+
+    for i, method in enumerate(methods):
+        accs = []
+        for ds in valid_datasets:
+            accs.append(acc_matrix[ds].get(method, 0) * 100)
+        bars = ax.bar(x + (i - 1) * width, accs, width, label=method,
+                      color=colors[i], alpha=0.85, edgecolor="none")
+        for bar, acc in zip(bars, accs):
+            if acc > 0:
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
+                        f"{acc:.1f}", ha="center", va="bottom", fontsize=7)
+
+    ds_labels = {"eurosat": "EuroSAT", "cifar100": "CIFAR-100", "resisc45": "RESISC45"}
+    ax.set_xticks(x)
+    ax.set_xticklabels([ds_labels.get(ds, ds) for ds in valid_datasets])
+    ax.set_ylabel("Test Accuracy (%)")
+    ax.set_title("Cross-Dataset Accuracy: Baseline vs UCAT vs Decomposed")
+    ax.legend(loc="lower right")
+    ax.grid(axis="y", alpha=0.25, linewidth=0.5)
+
+    # Tight y-axis
+    all_accs = [acc_matrix[ds].get(m, 0) * 100 for ds in valid_datasets for m in methods]
+    valid_accs = [a for a in all_accs if a > 0]
+    if valid_accs:
+        ax.set_ylim(max(0, min(valid_accs) - 5), min(100, max(valid_accs) + 4))
+
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {save_path}")
+    return True
+
+
+# ============================================================================
+# Figure 11: Uncertainty Method Comparison
+# ============================================================================
+
+def generate_fig11(uncertainty_data, output_dir, dpi):
+    """Generate Fig 11: bar chart comparing uncertainty methods.
+
+    Parameters
+    ----------
+    uncertainty_data : dict
+        Parsed uncertainty_comparison.json with per-method results.
+    output_dir : str
+        Output directory.
+    dpi : int
+        Image resolution.
+
+    Returns
+    -------
+    bool
+        True if the figure was created.
+    """
+    save_path = os.path.join(output_dir, "fig11_uncertainty_comparison.png")
+
+    if not isinstance(uncertainty_data, dict):
+        return False
+
+    methods_data = uncertainty_data.get("methods", uncertainty_data)
+    if not methods_data:
+        return False
+
+    method_names = []
+    accuracies = []
+    eces = []
+
+    for method_name, results in methods_data.items():
+        if not isinstance(results, dict):
+            continue
+        acc = results.get("accuracy", results.get("test_acc"))
+        ece = results.get("ece")
+        if acc is not None:
+            method_names.append(method_name.replace("_", " ").title())
+            accuracies.append(float(acc) * 100)
+            eces.append(float(ece) * 100 if ece is not None else 0)
+
+    if len(method_names) < 2:
+        return False
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 3.5))
+
+    x = np.arange(len(method_names))
+    colors = ["#1565C0", "#42A5F5", "#66BB6A", "#FFA726"][:len(method_names)]
+
+    # Accuracy subplot
+    bars1 = ax1.bar(x, accuracies, color=colors, alpha=0.85, edgecolor="none")
+    for bar, acc in zip(bars1, accuracies):
+        ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.2,
+                 f"{acc:.1f}", ha="center", va="bottom", fontsize=7)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(method_names, rotation=25, ha="right")
+    ax1.set_ylabel("Accuracy (%)")
+    ax1.set_title("Accuracy")
+    ax1.grid(axis="y", alpha=0.25, linewidth=0.5)
+
+    # ECE subplot
+    if any(e > 0 for e in eces):
+        bars2 = ax2.bar(x, eces, color=colors, alpha=0.85, edgecolor="none")
+        for bar, ece in zip(bars2, eces):
+            if ece > 0:
+                ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.05,
+                         f"{ece:.2f}", ha="center", va="bottom", fontsize=7)
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(method_names, rotation=25, ha="right")
+        ax2.set_ylabel("ECE (%)")
+        ax2.set_title("Expected Calibration Error")
+        ax2.grid(axis="y", alpha=0.25, linewidth=0.5)
+    else:
+        ax2.text(0.5, 0.5, "ECE data not available", ha="center", va="center",
+                 transform=ax2.transAxes)
+
+    fig.suptitle("Uncertainty Method Comparison", fontsize=TITLE_SIZE, y=1.02)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {save_path}")
+    return True
+
+
+# ============================================================================
+# Figure 12: Architecture Comparison (ViT-Tiny vs ViT-Small)
+# ============================================================================
+
+def generate_fig12(acc_data, output_dir, dpi):
+    """Generate Fig 12: ViT-Tiny vs ViT-Small comparison bar chart.
+
+    Parameters
+    ----------
+    acc_data : dict
+        Parsed evaluation_results.json.
+    output_dir : str
+        Output directory.
+    dpi : int
+        Image resolution.
+
+    Returns
+    -------
+    bool
+        True if the figure was created.
+    """
+    save_path = os.path.join(output_dir, "fig12_architecture_comparison.png")
+
+    if not isinstance(acc_data, dict):
+        return False
+
+    # Map experiments to arch comparisons
+    arch_pairs = {
+        "Baseline": {"tiny": "baseline", "small": "eurosat_baseline_small"},
+        "All Combined": {"tiny": "all_combined_s42", "small": "eurosat_all_combined_small"},
+        "Decomposed": {"tiny": "decomp_with_losses", "small": "eurosat_decomp_small"},
+    }
+
+    methods = []
+    tiny_accs = []
+    small_accs = []
+    found_small = False
+
+    for method_name, exp_map in arch_pairs.items():
+        tiny_name = exp_map["tiny"]
+        small_name = exp_map["small"]
+
+        tiny_acc = None
+        small_acc = None
+
+        if tiny_name in acc_data:
+            entry = acc_data[tiny_name]
+            tiny_acc = entry.get("test_acc") if isinstance(entry, dict) else entry
+
+        if small_name in acc_data:
+            entry = acc_data[small_name]
+            small_acc = entry.get("test_acc") if isinstance(entry, dict) else entry
+            found_small = True
+
+        methods.append(method_name)
+        tiny_accs.append(float(tiny_acc) * 100 if tiny_acc is not None else 0)
+        small_accs.append(float(small_acc) * 100 if small_acc is not None else 0)
+
+    if not found_small:
+        return False
+
+    fig, ax = plt.subplots(figsize=(5.5, 3.5))
+
+    x = np.arange(len(methods))
+    width = 0.35
+
+    bars1 = ax.bar(x - width / 2, tiny_accs, width, label="ViT-Tiny (~5.7M)",
+                   color="#42A5F5", alpha=0.85, edgecolor="none")
+    bars2 = ax.bar(x + width / 2, small_accs, width, label="ViT-Small (~22M)",
+                   color="#1565C0", alpha=0.85, edgecolor="none")
+
+    for bars in [bars1, bars2]:
+        for bar in bars:
+            h = bar.get_height()
+            if h > 0:
+                ax.text(bar.get_x() + bar.get_width() / 2, h + 0.2,
+                        f"{h:.1f}", ha="center", va="bottom", fontsize=7)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(methods)
+    ax.set_ylabel("Test Accuracy (%)")
+    ax.set_title("Architecture Comparison: ViT-Tiny vs ViT-Small (EuroSAT)")
+    ax.legend(loc="lower right")
+    ax.grid(axis="y", alpha=0.25, linewidth=0.5)
+
+    all_accs = tiny_accs + small_accs
+    valid_accs = [a for a in all_accs if a > 0]
+    if valid_accs:
+        ax.set_ylim(max(0, min(valid_accs) - 3), min(100, max(valid_accs) + 3))
+
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {save_path}")
+    return True
+
+
+# ============================================================================
 # CLI
 # ============================================================================
 
@@ -918,6 +1213,7 @@ def main():
         "calibration":    os.path.join(results_dir, "calibration", "calibration_results.json"),
         "robustness":     os.path.join(results_dir, "robustness", "robustness_results.json"),
         "decomposition":  os.path.join(results_dir, "decomposition", "decomposition_results.json"),
+        "uncertainty":    os.path.join(results_dir, "uncertainty_eurosat", "uncertainty_comparison.json"),
     }
 
     data = {}
@@ -1029,6 +1325,42 @@ def main():
     else:
         skipped.append("fig9_blur_response.png (decomposition results not found)")
         print("  Skipped: decomposition results not found.")
+    print()
+
+    # Fig 10: Cross-Dataset Accuracy
+    print("--- Fig 10: Cross-Dataset Accuracy ---")
+    if data["accuracy"] is not None:
+        if generate_fig10(data["accuracy"], output_dir, dpi):
+            generated.append("fig10_cross_dataset_accuracy.png")
+        else:
+            skipped.append("fig10_cross_dataset_accuracy.png (insufficient data)")
+    else:
+        skipped.append("fig10_cross_dataset_accuracy.png (accuracy results not found)")
+        print("  Skipped: accuracy results not found.")
+    print()
+
+    # Fig 11: Uncertainty Method Comparison
+    print("--- Fig 11: Uncertainty Method Comparison ---")
+    if data["uncertainty"] is not None:
+        if generate_fig11(data["uncertainty"], output_dir, dpi):
+            generated.append("fig11_uncertainty_comparison.png")
+        else:
+            skipped.append("fig11_uncertainty_comparison.png (insufficient data)")
+    else:
+        skipped.append("fig11_uncertainty_comparison.png (uncertainty results not found)")
+        print("  Skipped: uncertainty results not found.")
+    print()
+
+    # Fig 12: Architecture Comparison
+    print("--- Fig 12: Architecture Comparison ---")
+    if data["accuracy"] is not None:
+        if generate_fig12(data["accuracy"], output_dir, dpi):
+            generated.append("fig12_architecture_comparison.png")
+        else:
+            skipped.append("fig12_architecture_comparison.png (insufficient data)")
+    else:
+        skipped.append("fig12_architecture_comparison.png (accuracy results not found)")
+        print("  Skipped: accuracy results not found.")
     print()
 
     # ------------------------------------------------------------------

@@ -21,7 +21,7 @@ import time
 import numpy as np
 import torch
 
-from src.data.eurosat import get_eurosat_dataloaders
+from src.data.datasets import get_dataloaders, get_dataset_info
 from src.models.efficient_vit import EfficientEuroSATViT, create_efficient_eurosat_tiny
 from src.models.baseline import BaselineViT
 from src.utils.helpers import set_seed, get_device, count_parameters
@@ -40,6 +40,9 @@ def parse_args():
         description='Benchmark inference latency for EfficientEuroSAT',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
+    parser.add_argument('--dataset', type=str, default='eurosat',
+                        choices=['eurosat', 'cifar100', 'resisc45'],
+                        help='Dataset to evaluate on')
     parser.add_argument('--data_root', type=str, default='./data',
                         help='Root directory for dataset')
     parser.add_argument('--checkpoint', type=str, default=None,
@@ -156,13 +159,13 @@ def create_model_configs():
     return configs
 
 
-def build_model(config, img_size, device):
+def build_model(config, img_size, device, num_classes=10):
     """Build a model from a config dictionary."""
     if config['model_class'] == 'baseline':
-        model = BaselineViT(img_size=img_size, num_classes=10)
+        model = BaselineViT(img_size=img_size, num_classes=num_classes)
     else:
         model = EfficientEuroSATViT(
-            img_size=img_size, num_classes=10, **config['kwargs']
+            img_size=img_size, num_classes=num_classes, **config['kwargs']
         )
     model = model.to(device)
     model.eval()
@@ -303,6 +306,8 @@ def main():
 
     os.makedirs(args.save_dir, exist_ok=True)
 
+    num_classes = get_dataset_info(args.dataset)['num_classes']
+
     # Create model configurations
     model_configs = create_model_configs()
 
@@ -319,7 +324,7 @@ def main():
     for config in model_configs:
         print(f"\n--- Benchmarking: {config['name']} ---")
 
-        model = build_model(config, args.img_size, device)
+        model = build_model(config, args.img_size, device, num_classes=num_classes)
         total_params, _ = count_parameters(model)
         print(f"  Parameters: {total_params:,}")
 
@@ -381,7 +386,7 @@ def main():
             input_tensor = torch.randn(1, 3, args.img_size, args.img_size)
 
             # CPU benchmark
-            model_cpu = build_model(config, args.img_size, cpu_device)
+            model_cpu = build_model(config, args.img_size, cpu_device, num_classes=num_classes)
             cpu_stats = benchmark_model(
                 model_cpu, input_tensor, cpu_device,
                 args.num_runs, args.warmup_runs
@@ -389,7 +394,7 @@ def main():
             del model_cpu
 
             # GPU benchmark
-            model_gpu = build_model(config, args.img_size, gpu_device)
+            model_gpu = build_model(config, args.img_size, gpu_device, num_classes=num_classes)
             gpu_stats = benchmark_model(
                 model_gpu, input_tensor, gpu_device,
                 args.num_runs, args.warmup_runs

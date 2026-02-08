@@ -23,18 +23,19 @@ import seaborn as sns
 
 from src.models.efficient_vit import EfficientEuroSATViT
 from src.models.baseline import BaselineViT
-from src.data.eurosat import get_eurosat_dataloaders, EUROSAT_CLASS_NAMES
+from src.data.datasets import get_dataloaders, get_dataset_info
 from src.data.blur import apply_all_blur_levels
 from src.training.losses import UCATLoss
 from src.utils.helpers import set_seed, get_device
 
 
-def load_model(checkpoint_path, device):
+def load_model(checkpoint_path, device, dataset_name='eurosat'):
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     config = ckpt.get('model_config', {})
+    default_num_classes = get_dataset_info(dataset_name)['num_classes']
 
     model = EfficientEuroSATViT(
-        num_classes=config.get('num_classes', 10),
+        num_classes=config.get('num_classes', default_num_classes),
         use_learned_temp=config.get('use_learned_temp', True),
         use_early_exit=config.get('use_early_exit', True),
         use_learned_dropout=config.get('use_learned_dropout', True),
@@ -130,6 +131,9 @@ def blur_response_analysis(model, dataloader, device, num_samples=500):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--checkpoint', type=str, required=True)
+    parser.add_argument('--dataset', type=str, default='eurosat',
+                        choices=['eurosat', 'cifar100', 'resisc45'],
+                        help='Dataset to evaluate on')
     parser.add_argument('--data_root', type=str, default='./data')
     parser.add_argument('--save_dir', type=str, default='./analysis_results/decomposition')
     parser.add_argument('--batch_size', type=int, default=64)
@@ -140,10 +144,11 @@ def main():
     device = get_device()
 
     print("Loading model...")
-    model, config = load_model(args.checkpoint, device)
+    model, config = load_model(args.checkpoint, device, dataset_name=args.dataset)
 
     print("Loading data...")
-    _, _, test_loader, _ = get_eurosat_dataloaders(
+    _, _, test_loader, _ = get_dataloaders(
+        dataset_name=args.dataset,
         root=args.data_root, batch_size=args.batch_size, num_workers=4
     )
 

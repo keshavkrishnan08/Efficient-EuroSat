@@ -26,7 +26,7 @@ import torch
 import torch.nn.functional as F
 from collections import defaultdict
 
-from src.data.eurosat import get_eurosat_dataloaders, EUROSAT_CLASS_NAMES
+from src.data.datasets import get_dataloaders, get_dataset_info, get_class_names
 from src.models.efficient_vit import EfficientEuroSATViT, create_efficient_eurosat_tiny
 from src.models.baseline import BaselineViT
 from src.utils.helpers import set_seed, get_device, count_parameters
@@ -47,6 +47,9 @@ def parse_args():
     )
     parser.add_argument('--checkpoint', type=str, required=True,
                         help='Path to model checkpoint')
+    parser.add_argument('--dataset', type=str, default='eurosat',
+                        choices=['eurosat', 'cifar100', 'resisc45'],
+                        help='Dataset to evaluate on')
     parser.add_argument('--data_root', type=str, default='./data',
                         help='Root directory for dataset')
     parser.add_argument('--save_dir', type=str, default='./eval_results',
@@ -64,7 +67,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_model_from_checkpoint(checkpoint_path, device):
+def load_model_from_checkpoint(checkpoint_path, device, dataset_name='eurosat'):
     """Load a model from a saved checkpoint."""
     print(f"Loading checkpoint from: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -72,11 +75,12 @@ def load_model_from_checkpoint(checkpoint_path, device):
     # Extract model config from checkpoint
     model_config = checkpoint.get('model_config', {})
     model_type = model_config.get('model_type', 'efficient_eurosat')
+    default_num_classes = get_dataset_info(dataset_name)['num_classes']
 
     if model_type == 'efficient_eurosat':
         model = EfficientEuroSATViT(
             img_size=model_config.get('img_size', 224),
-            num_classes=model_config.get('num_classes', 10),
+            num_classes=model_config.get('num_classes', default_num_classes),
             use_learned_temp=model_config.get('use_learned_temp', True),
             use_early_exit=model_config.get('use_early_exit', True),
             use_learned_dropout=model_config.get('use_learned_dropout', True),
@@ -91,7 +95,7 @@ def load_model_from_checkpoint(checkpoint_path, device):
     elif model_type == 'baseline':
         model = BaselineViT(
             img_size=model_config.get('img_size', 224),
-            num_classes=model_config.get('num_classes', 10),
+            num_classes=model_config.get('num_classes', default_num_classes),
         )
     else:
         raise ValueError(f"Unknown model type in checkpoint: {model_type}")
@@ -107,7 +111,7 @@ def load_model_from_checkpoint(checkpoint_path, device):
     return model, model_type, model_config
 
 
-def evaluate_accuracy(model, test_loader, device, num_classes=10):
+def evaluate_accuracy(model, test_loader, device, num_classes):
     """Run full accuracy evaluation on the test set."""
     all_preds = []
     all_labels = []
@@ -330,14 +334,18 @@ def main():
 
     # Load model
     model, model_type, model_config = load_model_from_checkpoint(
-        args.checkpoint, device
+        args.checkpoint, device, dataset_name=args.dataset
     )
     total_params, trainable_params = count_parameters(model)
     print(f"Parameters: {total_params:,} total, {trainable_params:,} trainable")
 
+    num_classes = get_dataset_info(args.dataset)['num_classes']
+    class_names = get_class_names(args.dataset)
+
     # Load data
-    print("\nLoading EuroSAT test data...")
-    _, _, test_loader, _ = get_eurosat_dataloaders(
+    print("\nLoading test data...")
+    _, _, test_loader, _ = get_dataloaders(
+        dataset_name=args.dataset,
         root=args.data_root,
         img_size=model_config.get('img_size', 224),
         batch_size=args.batch_size,
@@ -348,14 +356,14 @@ def main():
     # 1. Accuracy evaluation
     print("\n--- Accuracy Evaluation ---")
     acc_results, all_preds, all_labels, conf_matrix, per_class_acc = \
-        evaluate_accuracy(model, test_loader, device)
+        evaluate_accuracy(model, test_loader, device, num_classes=num_classes)
     print(f"  Overall Accuracy: {acc_results['overall_accuracy'] * 100:.2f}%")
     print(f"  Top-5 Accuracy:   {acc_results['top5_accuracy'] * 100:.2f}%")
     print(f"  Average Loss:     {acc_results['average_loss']:.4f}")
     print(f"  Worst classes:")
     for cls_info in acc_results['worst_classes']:
         cid = cls_info['class_id']
-        class_name = EUROSAT_CLASS_NAMES[cid] if cid < len(EUROSAT_CLASS_NAMES) else f"Class {cid}"
+        class_name = class_names[cid] if cid < len(class_names) else f"Class {cid}"
         print(f"    {cls_info['class_id']:2d} ({class_name}): {cls_info['accuracy'] * 100:.1f}%")
 
     # 2. Latency measurement
@@ -385,12 +393,12 @@ def main():
 
     # Confusion matrix
     cm_path = os.path.join(args.save_dir, 'confusion_matrix.png')
-    plot_confusion_matrix(conf_matrix, save_path=cm_path, class_names=EUROSAT_CLASS_NAMES)
+    plot_confusion_matrix(conf_matrix, save_path=cm_path, class_names=class_names)
     print(f"  Confusion matrix saved to: {cm_path}")
 
     # Per-class accuracy bar chart
     pca_path = os.path.join(args.save_dir, 'per_class_accuracy.png')
-    plot_per_class_accuracy(per_class_acc, save_path=pca_path, class_names=EUROSAT_CLASS_NAMES)
+    plot_per_class_accuracy(per_class_acc, save_path=pca_path, class_names=class_names)
     print(f"  Per-class accuracy plot saved to: {pca_path}")
 
     # Attention maps

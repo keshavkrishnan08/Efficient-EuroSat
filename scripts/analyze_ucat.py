@@ -30,7 +30,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from src.data.eurosat import get_eurosat_dataloaders, EUROSAT_CLASS_NAMES
+from src.data.datasets import get_dataloaders, get_dataset_info
 from src.models.efficient_vit import EfficientEuroSATViT, create_efficient_eurosat_tiny
 from src.models.baseline import BaselineViT
 from src.utils.helpers import set_seed, get_device
@@ -49,6 +49,11 @@ def parse_args():
     parser.add_argument(
         "--checkpoint", type=str, required=True,
         help="Path to model checkpoint",
+    )
+    parser.add_argument(
+        "--dataset", type=str, default="eurosat",
+        choices=["eurosat", "cifar100", "resisc45"],
+        help="Dataset to evaluate on",
     )
     parser.add_argument(
         "--data_root", type=str, default="./data",
@@ -73,7 +78,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_model_from_checkpoint(checkpoint_path, device):
+def load_model_from_checkpoint(checkpoint_path, device, dataset_name='eurosat'):
     """Load a model from a saved checkpoint."""
     print(f"Loading checkpoint from: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -81,11 +86,12 @@ def load_model_from_checkpoint(checkpoint_path, device):
     # Extract model config from checkpoint
     model_config = checkpoint.get("model_config", {})
     model_type = model_config.get("model_type", "efficient_eurosat")
+    default_num_classes = get_dataset_info(dataset_name)['num_classes']
 
     if model_type == "efficient_eurosat":
         model = EfficientEuroSATViT(
             img_size=model_config.get("img_size", 224),
-            num_classes=model_config.get("num_classes", 10),
+            num_classes=model_config.get("num_classes", default_num_classes),
             use_learned_temp=model_config.get("use_learned_temp", True),
             use_early_exit=model_config.get("use_early_exit", True),
             use_learned_dropout=model_config.get("use_learned_dropout", True),
@@ -100,7 +106,7 @@ def load_model_from_checkpoint(checkpoint_path, device):
     elif model_type == "baseline":
         model = BaselineViT(
             img_size=model_config.get("img_size", 224),
-            num_classes=model_config.get("num_classes", 10),
+            num_classes=model_config.get("num_classes", default_num_classes),
         )
     else:
         raise ValueError(f"Unknown model type in checkpoint: {model_type}")
@@ -194,12 +200,13 @@ def main():
 
     # Load model
     model, model_type, model_config = load_model_from_checkpoint(
-        args.checkpoint, device
+        args.checkpoint, device, dataset_name=args.dataset
     )
 
-    # Load EuroSAT test data
-    print("\nLoading EuroSAT test data...")
-    _, _, test_loader, _ = get_eurosat_dataloaders(
+    # Load test data
+    print("\nLoading test data...")
+    _, _, test_loader, _ = get_dataloaders(
+        dataset_name=args.dataset,
         root=args.data_root,
         img_size=model_config.get("img_size", 224),
         batch_size=args.batch_size,
