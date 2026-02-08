@@ -6,7 +6,7 @@ Enhanced UCAT (Uncertainty-Calibrated Attention Temperatures) with aleatoric/epi
 
 ```bash
 # 1. Clone the repo
-git clone git@github.com:keshavkrishnan08/Efficient-EuroSat.git
+git clone https://github.com/keshavkrishnan08/Efficient-EuroSat.git
 cd Efficient-EuroSat
 
 # 2. Install dependencies
@@ -124,7 +124,7 @@ bash run.sh
 
 ### Google Colab
 ```python
-!git clone git@github.com:keshavkrishnan08/Efficient-EuroSat.git
+!git clone https://github.com/keshavkrishnan08/Efficient-EuroSat.git
 %cd Efficient-EuroSat
 !pip install -r requirements.txt
 !bash run.sh
@@ -132,7 +132,7 @@ bash run.sh
 
 ### Lambda / Vast.ai / RunPod
 ```bash
-git clone git@github.com:keshavkrishnan08/Efficient-EuroSat.git
+git clone https://github.com/keshavkrishnan08/Efficient-EuroSat.git
 cd Efficient-EuroSat
 pip install -r requirements.txt
 nohup bash run.sh > run.log 2>&1 &
@@ -178,8 +178,8 @@ python scripts/statistical_significance.py --results_dir ./results
 
 # Uncertainty method comparison
 python scripts/compare_uncertainty_methods.py \
-    --checkpoint_ucat ./checkpoints/decomp_with_losses/best_model_val_acc.pt \
-    --checkpoint_baselines ./checkpoints/baseline/best_model_val_acc.pt \
+    --ucat_checkpoint ./checkpoints/decomp_with_losses/best_model_val_acc.pt \
+    --baseline_checkpoints ./checkpoints/baseline/best_model_val_acc.pt \
     --dataset eurosat
 
 # Generate all figures
