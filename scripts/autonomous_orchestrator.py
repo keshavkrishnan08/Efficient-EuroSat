@@ -24,18 +24,18 @@ import glob
 # ======================================================================
 
 BENCHMARKS = {
-    "baseline_acc_min": 0.85,
-    "baseline_acc_target": 0.90,
+    "baseline_acc_min": 0.92,
+    "baseline_acc_target": 0.95,
     "main_acc_improvement_min": 0.0,   # must be >= baseline
-    "main_acc_improvement_target": 0.01,  # 1% over baseline
+    "main_acc_improvement_target": 0.005,  # 0.5% over baseline
     "decomp_tau_a_e_corr_max": 0.5,    # hard max
     "decomp_tau_a_e_corr_target": 0.3,  # want < 0.3
     "decomp_blur_corr_min": 0.1,       # hard min
     "decomp_blur_corr_target": 0.3,    # want > 0.3
-    "ece_max": 0.10,
-    "ece_target": 0.06,
-    "ood_auroc_min": 0.55,
-    "ood_auroc_target": 0.70,
+    "ece_max": 0.08,
+    "ece_target": 0.04,
+    "ood_auroc_min": 0.60,
+    "ood_auroc_target": 0.75,
 }
 
 MAX_RETRIES = 3
@@ -84,7 +84,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Autonomous self-tuning EfficientEuroSAT pipeline"
     )
-    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--data_root", type=str, default="./data")
     parser.add_argument("--resume", action="store_true",
