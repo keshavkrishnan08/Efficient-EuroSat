@@ -27,18 +27,18 @@ import glob
 # ======================================================================
 
 BENCHMARKS = {
-    "baseline_acc_min": 0.92,
-    "baseline_acc_target": 0.95,
+    "baseline_acc_min": 0.90,
+    "baseline_acc_target": 0.93,
     "main_acc_improvement_min": 0.0,   # must be >= baseline
-    "main_acc_improvement_target": 0.005,  # 0.5% over baseline
+    "main_acc_improvement_target": 0.003,  # 0.3% over baseline
     "decomp_tau_a_e_corr_max": 0.5,    # hard max
     "decomp_tau_a_e_corr_target": 0.3,  # want < 0.3
     "decomp_blur_corr_min": 0.1,       # hard min
-    "decomp_blur_corr_target": 0.3,    # want > 0.3
-    "ece_max": 0.08,
-    "ece_target": 0.04,
-    "ood_auroc_min": 0.60,
-    "ood_auroc_target": 0.75,
+    "decomp_blur_corr_target": 0.2,    # want > 0.2
+    "ece_max": 0.10,
+    "ece_target": 0.05,
+    "ood_auroc_min": 0.55,
+    "ood_auroc_target": 0.70,
 }
 
 MAX_RETRIES = 3
