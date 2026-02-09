@@ -163,9 +163,16 @@ echo " Self-tuning: if benchmarks are not met, hyperparameters"
 echo " will be adjusted and the experiment retrained (up to 3 retries)."
 echo ""
 
+EPOCHS="${EPOCHS:-50}"
+BATCH_SIZE="${BATCH_SIZE:-64}"
+
+echo " Using: EPOCHS=$EPOCHS, BATCH_SIZE=$BATCH_SIZE"
+echo " (Override with: EPOCHS=200 BATCH_SIZE=32 bash run.sh)"
+echo ""
+
 python3 -u scripts/autonomous_orchestrator.py \
-    --epochs 200 \
-    --batch_size 64 \
+    --epochs "$EPOCHS" \
+    --batch_size "$BATCH_SIZE" \
     --data_root ./data
 
 echo ""
