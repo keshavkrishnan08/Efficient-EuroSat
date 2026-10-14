@@ -22,11 +22,11 @@ That's it. `run.sh` handles everything from data download to final figures.
 
 This project implements 5 learned attention modifications for Vision Transformers:
 
-1. **Learned Temperature Scaling (UCAT)** — per-head, input-dependent temperature parameters
-2. **Early Exit** — confidence-based early termination at intermediate layers
-3. **Learned Dropout** — per-layer learned dropout rates via sigmoid gating
-4. **Learned Residual Scaling** — adaptive residual connection weights
-5. **Temperature Annealing** — cosine annealing schedule for temperature evolution
+1. **Learned Temperature Scaling (UCAT)** - per-head, input-dependent temperature parameters
+2. **Early Exit** - confidence-based early termination at intermediate layers
+3. **Learned Dropout** - per-layer learned dropout rates via sigmoid gating
+4. **Learned Residual Scaling** - adaptive residual connection weights
+5. **Temperature Annealing** - cosine annealing schedule for temperature evolution
 
 Plus an **aleatoric/epistemic temperature decomposition** that separates attention temperature into:
 - **Aleatoric (input-dependent)**: responds to image-level noise/blur
@@ -45,7 +45,7 @@ Plus an **aleatoric/epistemic temperature decomposition** that separates attenti
 
 | Phase | Experiments | Description |
 |-------|------------|-------------|
-| 1 | 3 | EuroSAT baselines (seeds 42, 123, 456 — needed for Deep Ensemble) |
+| 1 | 3 | EuroSAT baselines (seeds 42, 123, 456 - needed for Deep Ensemble) |
 | 2 | 1 | Main decomposed model with self-tuning retries |
 | 3 | 12 | EuroSAT ablations (each mod individually + combined + no-UCAT + decomp variants) |
 | 3b | 11 | 3-seed coverage for all ablations (seeds 123, 456) |
