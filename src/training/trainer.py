@@ -536,7 +536,7 @@ class EuroSATTrainer:
                         return_temperatures=True,
                     )
                     if mixed:
-                        # MixUp targets are soft — use cross-entropy with soft labels
+                        # MixUp targets are soft: use cross-entropy with soft labels
                         task_loss = -torch.sum(
                             targets * torch.log_softmax(outputs, dim=-1), dim=-1
                         ).mean()

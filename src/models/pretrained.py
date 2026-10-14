@@ -2,7 +2,7 @@
 
 Downloads and maps timm's `vit_tiny_patch16_224` or `vit_small_patch16_224`
 weights to our custom EfficientEuroSATViT and BaselineViT architectures.
-Only backbone weights are transferred — the classification head is
+Only backbone weights are transferred: the classification head is
 re-initialized for the target dataset, and all UCAT modification
 parameters start from scratch.
 """
@@ -49,7 +49,7 @@ def load_pretrained_efficient(model: nn.Module) -> None:
     new_sd = {}
 
     for key, param in timm_sd.items():
-        # Skip classification head — we have 10 classes, not 1000
+        # Skip classification head: we have 10 classes, not 1000
         if key.startswith("head."):
             skipped += 1
             continue

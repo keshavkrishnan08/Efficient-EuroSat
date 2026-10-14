@@ -103,7 +103,7 @@ def mc_dropout_inference(
                 probs = F.softmax(logits, dim=-1)  # (B, C)
                 stacked_probs.append(probs.cpu().numpy())
 
-            # Stack: (n_forward, B, C) — keep full stochastic samples
+            # Stack: (n_forward, B, C): keep full stochastic samples
             stacked = np.stack(stacked_probs, axis=0)
 
             all_stacked.append(stacked)

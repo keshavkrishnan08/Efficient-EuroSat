@@ -68,8 +68,8 @@ def apply_all_blur_levels(
     Returns
     -------
     tuple of (blurred_images, blur_level_tensor)
-        blurred_images: ``(B * 5, C, H, W)`` — all blur levels concatenated.
-        blur_level_tensor: ``(B * 5,)`` — corresponding blur level per image.
+        blurred_images: ``(B * 5, C, H, W)``: all blur levels concatenated.
+        blur_level_tensor: ``(B * 5,)``: corresponding blur level per image.
     """
     all_blurred = []
     all_levels = []

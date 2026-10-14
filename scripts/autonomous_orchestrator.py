@@ -249,7 +249,7 @@ def _get_dataset_for_experiment(exp):
 
 
 # ======================================================================
-# Experiments Definition — All 35 experiments
+# Experiments Definition: All 35 experiments
 # ======================================================================
 
 def get_experiments():
@@ -581,7 +581,7 @@ def run_all_evaluations(data_root, batch_size):
                 "--batch_size", str(batch_size),
             ] + ds_flag)
 
-        # 7. Robustness (EuroSAT only — other datasets use different corruption pipeline)
+        # 7. Robustness (EuroSAT only: other datasets use different corruption pipeline)
         if dataset == "eurosat" and os.path.isfile(ckpt_for_ucat):
             run_evaluation_script("analyze_robustness.py", [
                 "--checkpoint", ckpt_for_ucat,
