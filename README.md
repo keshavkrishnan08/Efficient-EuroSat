@@ -1,251 +1,147 @@
-# EfficientEuroSAT: Uncertainty-Calibrated Attention Temperatures for Vision Transformers
+# EfficientEuroSAT
 
-Enhanced UCAT (Uncertainty-Calibrated Attention Temperatures) with aleatoric/epistemic temperature decomposition for satellite land use classification.
+**Uncertainty-calibrated attention temperatures (UCAT) for Vision Transformers on satellite imagery.
+Each attention head learns how sharply to look, so that the temperature itself could serve as an
+uncertainty signal at no extra inference cost.**
 
-## Quick Start
+A Vision Transformer divides every attention logit by the same constant. A blurry Sentinel-2 tile or
+an ambiguous land-use patch gets attention exactly as sharp as a clean, easy one. UCAT makes the
+temperature a learned quantity and adds a loss that ties it to the model's own prediction entropy:
+soft attention when unsure, sharp attention when confident. If that works, the temperature is a free
+by-product of the forward pass that can flag miscalibrated or out-of-distribution inputs, and it can
+be compared directly with MC Dropout, deep ensembles and post-hoc temperature scaling, which all cost
+extra passes or extra models.
+
+```
+EuroSAT / CIFAR-100 / RESISC45 images (224 x 224)
+    ->  ViT-Tiny or ViT-Small backbone, ImageNet weights from timm
+    ->  attention logits / tau,  tau = tau_a (per image, per head) + tau_e (per head)
+    ->  task loss + UCAT loss (tau follows prediction entropy) + blur and consistency losses on tau_a
+    ->  35 training runs, then calibration, OOD, corruption, latency and baseline comparisons
+```
+
+Sharp attention when sure, soft attention when not.
+
+## The core idea
+
+1. **Temperature as a signal.** Each head divides its scaled attention logits by a learned
+   temperature, parameterised as `softplus(raw) + 0.1`, so it can sharpen or soften but never reach
+   zero.
+2. **Two parts.** `tau_e` is a learned value per head, shared by every input, annealed from 1.5x to
+   1.0x over training. `tau_a` comes from a small MLP on the CLS token and is meant to vary per
+   image. The decomposed model uses `tau = tau_a + tau_e`; the plain UCAT model uses `tau_e` alone.
+3. **Supervision on the temperature.** The UCAT loss is the negative Pearson correlation between
+   the mean temperature and the prediction entropy across a batch. A blur loss, applied every tenth
+   batch, asks `tau_a` to rise across five Gaussian blur levels (none to sigma 2.0), and a
+   consistency loss asks `tau_a` to agree across two augmentations of the same image.
+4. **Four other modifications, ablated one at a time.** Early exit when attention is peaked, learned
+   per-head attention dropout (rate capped at 0.3), a learned residual mix
+   `alpha * attn + (1 - alpha) * x`, and the temperature annealing schedule. Each runs alone, all run
+   together, and all run without the UCAT loss.
+
+## What it does
+
+No trained checkpoints, result files or figures are committed, so this section lists what the
+pipeline is built to measure rather than measured numbers.
+
+| Question | How the pipeline answers it | Script |
+|---|---|---|
+| Does tau track uncertainty? | temperature vs prediction entropy (Pearson r), tau on correct vs wrong predictions | `analyze_ucat.py` |
+| Is the model calibrated? | ECE and MCE with reliability diagrams, UCAT vs baseline | `analyze_calibration.py` |
+| Does tau flag foreign inputs? | AUROC, AUPR and FPR@95 with temperature as the score, EuroSAT vs DTD textures | `analyze_ood.py` |
+| Does it survive corruption? | accuracy and mean tau under blur, color jitter, Gaussian noise, brightness and contrast shifts | `analyze_robustness.py` |
+| Are tau_a and tau_e separate? | Pearson, Spearman and distance correlation, blur response curves | `analyze_decomposition.py` |
+| Is it better than the usual tools? | MC Dropout, a deep ensemble of the three EuroSAT baselines, post-hoc temperature scaling, ECE over 15 bins | `compare_uncertainty_methods.py` |
+| Are differences real? | paired t-tests over seeds 42, 123, 456, Bonferroni correction, Cohen's d with bootstrap CI, LaTeX tables | `statistical_significance.py` |
+| What does it cost? | latency with and without early exit on GPU and CPU (50 warmup, 200 timed runs), ONNX export | `benchmark_latency.py`, `export_onnx.py` |
+
+The 35 runs: 26 on EuroSAT with ViT-Tiny (baselines, the decomposed model, every ablation, three
+seeds for most configs), plus baseline, all-modifications and decomposed runs on CIFAR-100,
+RESISC45, and EuroSAT with ViT-Small, one seed each.
+
+## How it works
+
+**Data.** EuroSAT (10 classes, split 80/10/10 with seed 42 because it has no official split),
+CIFAR-100 (100 classes) and NWPU-RESISC45 (45 classes, downloaded by `src/data/resisc45.py`). All
+are resized to 224 x 224. Training loaders use inverse-frequency weighted sampling by default.
+
+**Model.** A ViT with 16 x 16 patches. ViT-Tiny: 192-dim embeddings, 12 layers, 3 heads, about
+5.7M parameters. ViT-Small: 384-dim, 12 layers, 6 heads, about 22M. Backbone weights come from timm's
+ImageNet checkpoints; the head and every UCAT parameter start from scratch.
+
+**Training.** AdamW (learning rate 5e-4, weight decay 0.05), cosine schedule with linear warmup over
+the first tenth of training, label smoothing 0.1, MixUp 0.8 and CutMix 1.0 (via timm), gradient
+clipping at 1.0, mixed precision on CUDA. Loss weights are 0.1 for UCAT and 0.05 each for the
+aleatoric and epistemic terms. These come from the command-line defaults in `scripts/train.py`.
+
+**Orchestration.** `scripts/autonomous_orchestrator.py` runs all 35 experiments in order, skips any
+with an existing checkpoint under `--resume`, then runs every analysis script per dataset and
+writes `pipeline_summary.json`. If the main decomposed model's test accuracy lands below the
+baseline's, or its validation-to-test gap exceeds 0.15, the orchestrator retrains it, up to three
+attempts.
+
+**Early exit.** At inference, after the first four layers, a sample leaves the network when the mean
+of its heads' maximum attention weights reaches 0.9, and the classifier reads its CLS token there.
+Early exit is off during training and in the ONNX export.
+
+## Run it
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/keshavkrishnan08/Efficient-EuroSat.git
-cd Efficient-EuroSat
-
-# 2. Install dependencies
 pip install -r requirements.txt
-
-# 3. Run everything autonomously
-bash run.sh
+bash run.sh                                   # setup checks, all 35 runs, every analysis (EPOCHS=50 by default)
+EPOCHS=200 BATCH_SIZE=32 bash run.sh          # longer schedule, smaller batches
 ```
 
-That's it. `run.sh` handles everything from data download to final figures.
-
-## What This Project Does
-
-This project implements 5 learned attention modifications for Vision Transformers:
-
-1. **Learned Temperature Scaling (UCAT)** - per-head, input-dependent temperature parameters
-2. **Early Exit** - confidence-based early termination at intermediate layers
-3. **Learned Dropout** - per-layer learned dropout rates via sigmoid gating
-4. **Learned Residual Scaling** - adaptive residual connection weights
-5. **Temperature Annealing** - cosine annealing schedule for temperature evolution
-
-Plus an **aleatoric/epistemic temperature decomposition** that separates attention temperature into:
-- **Aleatoric (input-dependent)**: responds to image-level noise/blur
-- **Epistemic (class-dependent)**: responds to training data rarity
-
-## What Happens When You Run `run.sh`
-
-### Phase 0: Setup & Smoke Tests
-- Installs dependencies (including scipy for statistical tests)
-- Auto-detects GPU (CUDA or MPS)
-- Verifies all models build correctly (ViT-Tiny + ViT-Small, baseline + efficient + decomposed)
-- Verifies all 3 datasets are accessible (EuroSAT, CIFAR-100, RESISC45)
-- Verifies loss functions compute without errors
-
-### Phase 1-5: Training (35 Experiments via Autonomous Orchestrator)
-
-| Phase | Experiments | Description |
-|-------|------------|-------------|
-| 1 | 3 | EuroSAT baselines (seeds 42, 123, 456 - needed for Deep Ensemble) |
-| 2 | 1 | Main decomposed model with self-tuning retries |
-| 3 | 12 | EuroSAT ablations (each mod individually + combined + no-UCAT + decomp variants) |
-| 3b | 11 | 3-seed coverage for all ablations (seeds 123, 456) |
-| 4 | 6 | Multi-dataset: CIFAR-100 + RESISC45 (baseline + combined + decomp each) |
-| 5 | 3 | Multi-architecture: ViT-Small on EuroSAT (baseline + combined + decomp) |
-| **Total** | **35** | |
-
-### Self-Tuning
-If benchmark targets aren't met, the orchestrator automatically:
-- Diagnoses the issue (low accuracy, overfitting, high tau correlation, etc.)
-- Adjusts hyperparameters (learning rate, dropout, lambda weights, etc.)
-- Retrains (up to 3 retries per experiment)
-
-### Evaluation & Analysis
-After training, the pipeline runs:
-- Per-dataset accuracy evaluation and per-class breakdown
-- UCAT temperature-entropy correlation analysis
-- OOD detection via temperature
-- Calibration comparison (baseline vs UCAT)
-- Robustness under corruptions
-- Decomposition validation (tau_a vs tau_e independence)
-- Blur response analysis
-- Training dynamics
-- Latency benchmarks
-- **Uncertainty method comparison**: UCAT vs MC Dropout vs Deep Ensemble vs Post-hoc Temperature Scaling
-- **Statistical significance tests**: paired t-tests across 3 seeds with LaTeX table output
-- **Theoretical analysis**: gradient independence verification, temperature bounds, convergence metrics
-- **12 publication-quality figures** (IEEE TNNLS format, 300 DPI)
-
-## Datasets
-
-| Dataset | Classes | Images | Type | Source |
-|---------|---------|--------|------|--------|
-| EuroSAT | 10 | 27,000 | Satellite land use | `torchvision.datasets.EuroSAT` |
-| CIFAR-100 | 100 | 60,000 | Natural images | `torchvision.datasets.CIFAR100` |
-| RESISC45 | 45 | 31,500 | Remote sensing scenes | Auto-downloaded from GCS |
-
-All datasets are automatically downloaded on first run.
-
-## Architectures
-
-| Architecture | Params | Embed Dim | Layers | Heads |
-|-------------|--------|-----------|--------|-------|
-| ViT-Tiny | ~5.7M | 192 | 12 | 3 |
-| ViT-Small | ~22M | 384 | 12 | 6 |
-
-Both architectures use ImageNet-pretrained weights from `timm`.
-
-## GPU Requirements
-
-| Setup | VRAM Needed | Estimated Time (35 runs) |
-|-------|-------------|--------------------------|
-| Single GPU (A100/H100) | ~4-8 GB | ~20 hours |
-| Single GPU (RTX 3090/4090) | ~4-8 GB | ~30-40 hours |
-| Single GPU (T4/V100) | ~4-8 GB | ~40-60 hours |
-| Apple MPS (M1/M2/M3) | ~8 GB | ~60-80 hours |
-
-ViT-Tiny uses ~4 GB VRAM, ViT-Small uses ~8 GB. Training time depends on the number of retry cycles triggered by the self-tuning orchestrator.
-
-## Running on Common GPU Platforms
-
-### SLURM Cluster
-```bash
-#!/bin/bash
-#SBATCH --job-name=eurosat
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
-#SBATCH --time=24:00:00
-#SBATCH --output=eurosat_%j.log
-
-module load cuda python
-pip install -r requirements.txt
-bash run.sh
-```
-
-### Google Colab
-```python
-!git clone https://github.com/keshavkrishnan08/Efficient-EuroSat.git
-%cd Efficient-EuroSat
-!pip install -r requirements.txt
-!bash run.sh
-```
-
-### Lambda / Vast.ai / RunPod
-```bash
-git clone https://github.com/keshavkrishnan08/Efficient-EuroSat.git
-cd Efficient-EuroSat
-pip install -r requirements.txt
-nohup bash run.sh > run.log 2>&1 &
-tail -f run.log
-```
-
-## Running Individual Experiments
+Single pieces:
 
 ```bash
-# Run a specific experiment by number
-python scripts/run_experiments.py --run 1 2 7
-
-# Resume (skip completed experiments)
-python scripts/run_experiments.py --resume
-
-# Custom epochs/batch size
-python scripts/run_experiments.py --epochs 50 --batch_size 32
-
-# Train a single model directly
+python scripts/run_experiments.py --run 1 2 7         # chosen experiments by number
+python scripts/run_experiments.py --resume            # skip finished ones
 python scripts/train.py --model efficient_eurosat --dataset eurosat --arch tiny --epochs 200
-python scripts/train.py --model baseline --dataset cifar100 --arch small --epochs 200
-```
-
-## Running Individual Analysis Scripts
-
-All analysis scripts accept a `--dataset` parameter:
-
-```bash
-# Evaluate a checkpoint
-python scripts/evaluate.py --checkpoint ./checkpoints/decomp_with_losses/best_model_val_acc.pt --dataset eurosat
-
-# Calibration analysis
 python scripts/analyze_calibration.py \
     --checkpoint_ucat ./checkpoints/decomp_with_losses/best_model_val_acc.pt \
-    --checkpoint_baseline ./checkpoints/baseline/best_model_val_acc.pt \
-    --dataset eurosat
-
-# OOD detection
-python scripts/analyze_ood.py --checkpoint ./checkpoints/decomp_with_losses/best_model_val_acc.pt --dataset eurosat
-
-# Statistical significance
+    --checkpoint_baseline ./checkpoints/baseline/best_model_val_acc.pt --dataset eurosat
 python scripts/statistical_significance.py --results_dir ./results
-
-# Uncertainty method comparison
-python scripts/compare_uncertainty_methods.py \
-    --ucat_checkpoint ./checkpoints/decomp_with_losses/best_model_val_acc.pt \
-    --baseline_checkpoints ./checkpoints/baseline/best_model_val_acc.pt \
-    --dataset eurosat
-
-# Generate all figures
-python scripts/generate_figures.py --results_dir ./analysis_results --output_dir ./figures
+pytest tests/
 ```
 
-## Output Structure
+Datasets download on first use. `GPU_RUN_GUIDE.md` has SLURM and Colab recipes.
 
-After completion, results are organized as:
+## Layout
 
 ```
-checkpoints/              # Trained model weights (35 experiments)
-  baseline/
-  baseline_s123/
-  baseline_s456/
-  decomp_with_losses/
-  all_combined_s42/
-  cifar100_baseline/
-  resisc45_decomp/
-  eurosat_baseline_small/
-  ...
-results/                  # Training metrics JSON per experiment
-analysis_results/         # Evaluation outputs
-  accuracy/               - Per-experiment test accuracy (all datasets)
-  ucat/                   - Temperature-entropy correlation
-  ood/                    - OOD detection
-  calibration/            - ECE baseline vs UCAT
-  robustness/             - Corruption robustness
-  decomposition/          - tau_a vs tau_e analysis
-  dynamics/               - Training dynamics
-  latency/                - Inference speed benchmarks
-  uncertainty_eurosat/    - Uncertainty method comparison (EuroSAT)
-  uncertainty_cifar100/   - Uncertainty method comparison (CIFAR-100)
-  uncertainty_resisc45/   - Uncertainty method comparison (RESISC45)
-  significance/           - Statistical significance tests + LaTeX tables
-  theoretical/            - Gradient independence + convergence analysis
-figures/                  # Publication-ready PNG figures (300 DPI)
-  fig2_tau_entropy_scatter.png
-  fig3_correct_vs_wrong.png
-  fig4_ood_detection.png
-  fig5_calibration_comparison.png
-  fig6_robustness.png
-  fig7_ablation_accuracy.png
-  fig8_decomposition_scatter.png
-  fig9_blur_response.png
-  fig10_cross_dataset_accuracy.png
-  fig11_uncertainty_comparison.png
-  fig12_architecture_comparison.png
-pipeline_summary.json     # Full pipeline report
+configs/                 reference YAML for training, ablations, deployment (not loaded by the code)
+src/
+  models/                ViT with modified attention, temperature predictor, baselines, timm weight loading
+  training/              trainer, UCAT and decomposition losses, schedulers, callbacks
+  data/                  EuroSAT, CIFAR-100, RESISC45 loaders, blur levels, augmentation pairs, class weights
+  evaluation/            calibration, OOD, corruption tests, early exit stats, latency, MC Dropout, ensembles
+  utils/                 checkpoints, logging, seeding, plotting
+scripts/                 orchestrator, train, evaluate, one analysis script per question, figures, ONNX export
+tests/                   attention modifications, data, early exit, model shapes
+run.sh                   one-command pipeline
 ```
 
-## Experiment Matrix
+## Honesty
 
-| Dataset | Architecture | Experiments | Seeds | Training Runs |
-|---------|-------------|-------------|-------|---------------|
-| EuroSAT | ViT-Tiny | Full ablation (10 configs) | 42, 123, 456 | 26 |
-| EuroSAT | ViT-Small | baseline + combined + decomp | 42 | 3 |
-| CIFAR-100 | ViT-Tiny | baseline + combined + decomp | 42 | 3 |
-| RESISC45 | ViT-Tiny | baseline + combined + decomp | 42 | 3 |
-| **Total** | | | | **35 runs** |
+* Nothing has been measured in this repo. There are no checkpoints, result JSONs or figures, and
+  the old README's run-time estimates have no logs behind them.
+* `tau_a` does not depend on the image yet. The temperature MLP reads the CLS token before the
+  first transformer block, where it is the same learned vector for every input (plus dropout noise
+  during training). It needs a later CLS token or pooled patch features to see the image.
+* As a result, every correlation loss currently sees a temperature that is constant across the
+  batch. `tau_e` is shared by all inputs by design, and `tau_a` is constant because of the point
+  above, so the UCAT, blur and class-rarity terms have no image-specific signal to learn from.
+* The retry loop reads the test set. The orchestrator retrains the main model when its test accuracy
+  falls below the baseline's, which is model selection on test data. The retry also multiplies only
+  flags that were passed, and `--lr` is not, so an accuracy retry reruns the same config.
+* Early exit reuses the final classifier on intermediate layers. `EarlyExitLoss` is defined but never
+  used in training, and the exit trigger is attention peakedness, not class confidence.
+* Seeds are thin. Three seeds exist only for 8 of the 10 EuroSAT ViT-Tiny configs; CIFAR-100,
+  RESISC45 and ViT-Small get one run each, so cross-dataset differences cannot be tested for
+  significance. Paired t-tests on three seeds have little power.
+* `run.sh` defaults to 50 epochs for a free Colab T4, while `train.py` defaults to 200. The YAML
+  files in `configs/` are not read by any script; the settings that run are the command-line
+  defaults in `scripts/train.py` and the flags in the orchestrator.
 
-## Troubleshooting
-
-- **Out of memory**: Reduce batch size: `python scripts/autonomous_orchestrator.py --batch_size 32`
-- **Data download fails**: Manually download EuroSAT to `./data/eurosat/`, CIFAR-100 downloads automatically, RESISC45 to `./data/resisc45/`
-- **Script hangs on data loading**: Set `num_workers=0` in the orchestrator if running in a container
-- **Want to skip training and just evaluate**: Place checkpoint files in `./checkpoints/<experiment_name>/best_model_val_acc.pt` and run `python scripts/autonomous_orchestrator.py --resume`
-- **Run only EuroSAT experiments**: `python scripts/run_experiments.py --run 1 2 3 4 5 6 7 8 9 10 11 12 13`
-- **Run only multi-dataset experiments**: `python scripts/run_experiments.py --run 27 28 29 30 31 32`
+MIT licensed.
