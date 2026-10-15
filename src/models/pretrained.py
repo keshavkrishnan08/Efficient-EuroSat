@@ -60,7 +60,7 @@ def load_pretrained_efficient(model: nn.Module) -> None:
         # Skip shape mismatches (shouldn't happen for Tiny but be safe)
         if param.shape != model_sd[key].shape:
             logger.warning(
-                "Shape mismatch for %s: timm %s vs model %s — skipping",
+                "Shape mismatch for %s: timm %s vs model %s, skipping",
                 key, param.shape, model_sd[key].shape,
             )
             skipped += 1
@@ -146,7 +146,7 @@ def load_pretrained_baseline(model: nn.Module) -> None:
             continue
         if param.shape != model_sd[target_key].shape:
             logger.warning(
-                "Shape mismatch for %s -> %s: %s vs %s — skipping",
+                "Shape mismatch for %s -> %s: %s vs %s, skipping",
                 timm_key, target_key, param.shape, model_sd[target_key].shape,
             )
             skipped += 1
@@ -187,7 +187,7 @@ def load_pretrained_efficient_small(model: nn.Module) -> None:
             continue
         if param.shape != model_sd[key].shape:
             logger.warning(
-                "Shape mismatch for %s: timm %s vs model %s — skipping",
+                "Shape mismatch for %s: timm %s vs model %s, skipping",
                 key, param.shape, model_sd[key].shape,
             )
             skipped += 1

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# EfficientEuroSAT — Autonomous IEEE TNNLS Pipeline
+# EfficientEuroSAT: Autonomous IEEE TNNLS Pipeline
 # ==============================================================================
 #
 # Enhanced UCAT: Input-Dependent Temperature + Aleatoric/Epistemic Decomposition
@@ -31,7 +31,7 @@ cd "$SCRIPT_DIR"
 echo ""
 echo "######################################################################"
 echo "#                                                                    #"
-echo "#    EfficientEuroSAT — Autonomous IEEE TNNLS Pipeline               #"
+echo "#    EfficientEuroSAT, Autonomous IEEE TNNLS Pipeline               #"
 echo "#    Enhanced UCAT with Aleatoric/Epistemic Decomposition            #"
 echo "#    Multi-Dataset | Multi-Architecture | 35 Experiments             #"
 echo "#                                                                    #"

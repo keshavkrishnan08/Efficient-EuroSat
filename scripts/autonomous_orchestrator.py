@@ -719,7 +719,7 @@ def main():
 
     print()
     print("#" * 72)
-    print("#  EfficientEuroSAT — Autonomous Self-Tuning TNNLS Pipeline")
+    print("#  EfficientEuroSAT, Autonomous Self-Tuning TNNLS Pipeline")
     print("#" * 72)
     print(f"  Epochs:     {args.epochs}")
     print(f"  Batch size: {args.batch_size}")

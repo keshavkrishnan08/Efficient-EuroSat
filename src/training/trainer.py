@@ -194,7 +194,7 @@ class EuroSATTrainer:
                 )
                 print(f"[EuroSATTrainer] MixUp(alpha={mixup_alpha}) + CutMix(alpha={cutmix_alpha}) enabled")
             except ImportError:
-                print("[EuroSATTrainer] timm not available — MixUp/CutMix disabled")
+                print("[EuroSATTrainer] timm not available, MixUp/CutMix disabled")
 
         # Set up components (use provided or create defaults).
         self.optimizer = optimizer or self._setup_optimizer()
